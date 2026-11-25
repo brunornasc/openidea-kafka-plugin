@@ -19,7 +19,7 @@ use crate::model::{
     QuorumInfo, RECORD_SEP, Topic,
 };
 use openidea_plugin::details::ProcessLog;
-use openidea_plugin::{Error, HttpRequest, ProcessOutput, host};
+use openidea_plugin::{Error, HttpRequest, LogLevel, ProcessOutput, host};
 
 pub const TOPICS: &str = "kafka-topics.sh";
 pub const CONSUMER: &str = "kafka-console-consumer.sh";
@@ -290,7 +290,18 @@ fn execute(
         &i18n::tf("Kafka: {program}", &[("program", tool.program())]),
         true,
     );
-    let result = run_compat(tool, modern, legacy, stdin);
+    let result = run_compat(tool, modern.clone(), legacy, stdin);
+    if result.is_err() {
+        // Sem segredos: o JAAS está em arquivo e `redact` esconde valores.
+        host::log(
+            LogLevel::Debug,
+            &format!(
+                "Kafka CLI failed: {} {}",
+                tool.program(),
+                config::redact(&modern.join(" "))
+            ),
+        );
+    }
     if task.is_cancelled() {
         return Err(Error::Cancelled);
     }
@@ -303,11 +314,24 @@ fn build(
     modern: bool,
     specific: Vec<String>,
 ) -> Result<Vec<String>, Error> {
-    Ok(strings(&["--bootstrap-server", &c.bootstrap_servers])
-        .into_iter()
-        .chain(specific)
-        .chain(client_props(c, tool, modern)?)
-        .collect())
+    let mut args = strings(&["--bootstrap-server", &c.bootstrap_servers]);
+    // O arquivo de configuração é propriedade de `client_props`: uma única
+    // flag, com o caminho do arquivo gerado ou o arquivo informado pelo usuário.
+    // Flags vindas de `specific` são descartadas para que a CLI nunca receba
+    // `--command-config` duas vezes (o ConsoleConsumer 4.x rejeita isso).
+    let mut specific = specific.into_iter();
+    while let Some(arg) = specific.next() {
+        if matches!(
+            arg.as_str(),
+            "--command-config" | "--consumer.config" | "--producer.config"
+        ) {
+            let _ = specific.next();
+            continue;
+        }
+        args.push(arg);
+    }
+    args.extend(client_props(c, tool, modern)?);
+    Ok(args)
 }
 
 /// Hash estável para o nome do arquivo gerado a partir do JAAS inline.
@@ -1212,6 +1236,30 @@ mod tests {
             ok("t\n")
         });
         list_topics(&c).unwrap();
+    }
+
+    #[test]
+    fn build_sends_exactly_one_config_file_flag() {
+        let _host = crate::mock_host();
+        let mut c = connection();
+        c.security_protocol = "SASL_PLAINTEXT".into();
+        c.sasl_mechanism = "PLAIN".into();
+        c.sasl_jaas_config =
+            "org.example.LoginModule required username=\"dev\" password=\"secret\";".into();
+        let specific = strings(&["--list", "--command-config", "/tmp/stale.properties"]);
+        let args = build(&c, Tool::Topics, true, specific).unwrap();
+        let flags = args
+            .iter()
+            .filter(|a| {
+                matches!(
+                    a.as_str(),
+                    "--command-config" | "--consumer.config" | "--producer.config"
+                )
+            })
+            .count();
+        assert_eq!(flags, 1, "{args:?}");
+        assert!(!args.iter().any(|a| a == "/tmp/stale.properties"));
+        assert!(!args.iter().any(|a| a.contains("password=")));
     }
 
     #[test]
