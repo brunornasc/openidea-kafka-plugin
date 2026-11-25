@@ -222,14 +222,17 @@ with `{version}`), `cliFlavour` (`auto` / `kafka3` / `kafka4`), `maxMessages`,
 `timeoutMs`, `keepMessages`, `autoRefresh`, `keyDeserializer`,
 `valueDeserializer`, `keySerializer`, `valueSerializer` and `extraClasspath`.
 
-The four serde settings take a Java class name and are passed to
-`ConsoleConsumer`/`ConsoleProducer` as `--command-property` (or
-`--consumer-property` / `--producer-property` on Kafka 3.x). Empty means the CLI default;
-an entry in the connection's **Extra properties** wins over the global setting.
-`extraClasspath` appends jars/directories to `java -cp` when a custom class is
-used. A topic does **not** store a serializer: it only holds bytes, so text
-published by this plugin is readable by a ByteArrayDeserializer consumer and
-vice versa. See "Binary payloads" below.
+The serializer settings take a Java class name and are passed to
+`ConsoleProducer` as `--command-property` (or `--producer-property` on Kafka
+3.x). The deserializer settings are passed to `DefaultMessageFormatter` as
+`--formatter-property` (or `--property` on Kafka 3.x) — this is where the
+formatter actually reads `key.deserializer`/`value.deserializer`. Empty means
+the CLI default; an entry in the connection's **Extra properties** wins over
+the global setting; a format chosen in the Messages view wins over both global
+ser/de settings. `extraClasspath` appends jars/directories to `java -cp` when
+a custom class is used. A topic does **not** store a serializer: it only holds
+bytes, so text published by this plugin is readable by a ByteArrayDeserializer
+consumer and vice versa. See "Message formats" and "Binary payloads" below.
 
 `cliFlavour = auto` first tries Kafka 4.x flags (`--command-config`,
 `--command-property`, `--formatter-property`) and, if the CLI rejects an
@@ -237,17 +240,50 @@ option, retries with the 3.x ones (`--consumer.config`, `--producer.config`,
 `--consumer-property`, `--producer-property`, `--property`). Pin `kafka3` or
 `kafka4` to skip detection.
 
+## Message formats
+
+The Messages view has a **Format** combobox for consuming and another one for
+publishing. The options mirror Kafka serializer class names:
+`StringSerializer` (default), `ByteArraySerializer`, `IntegerSerializer`,
+`LongSerializer`, `DoubleSerializer`, `FloatSerializer`, `BytesSerializer`,
+`ByteBufferSerializer`, `VoidSerializer`, `JsonSerializer`,
+`KafkaAvroSerializer` and `KafkaProtobufSerializer`. The choice is saved per
+topic and shown in the **Serializer** and **Deserializer** columns of the
+Topics view, so switching topics restores what was used for each one.
+
+- On consume, the format selects the deserializer passed to
+  `--formatter-property`: the `Serializer` suffix becomes `Deserializer` and
+  the class comes from `org.apache.kafka.common.serialization`, except
+  `JsonSerializer` (`org.apache.kafka.connect.json`) and the two Confluent
+  formats. Short aliases and fully qualified class names are accepted and
+  normalized to one of the names above.
+- On publish, the same serializer class is passed via `--command-property`
+  (Kafka 4.x) or `--producer-property` (Kafka 3.x), after the global settings
+  so the per-topic choice wins. The text typed in the form is the wire
+  representation for String, numeric and Json formats; it is sent unchanged
+  for every format.
+- A topic only stores bytes. These formats are a client convention: a consumer
+  outside the plugin must use the matching deserializer to read the same
+  payload.
+
+`KafkaAvroSerializer`, `KafkaProtobufSerializer` and `VoidSerializer` cannot
+produce a message from a text field: Avro/Protobuf need Confluent jars plus a
+schema registry and the console producer only accepts text; Void produces a
+null value. The publish form rejects them with a clear message. To read such
+payloads, set `extraClasspath` (and `schema.registry.url` in Extra properties)
+or use a schema-aware client outside the plugin.
+
 ## Binary payloads
 
 The console tools are text-oriented. UTF-8 text works with any byte-based
 topic: Kafka does not attach a schema to the topic, so `StringSerializer` on
-publish and `ByteArrayDeserializer` on consume are compatible (the formatter
-decodes the bytes for display). Arbitrary binary payloads — Avro, Protobuf,
-packed records — need a matching deserializer **and** a formatter that can
-render it as text. Configure the class in `valueDeserializer` (and put its jar
-in `extraClasspath`), or consume outside the plugin with a proper schema-aware
-client. `ByteArraySerializer` is not useful for the plugin's publish form: the
-console producer feeds it a `String`, while that serializer expects `byte[]`.
+publish and `ByteArrayDeserializer` on consume are compatible. Kafka 4.x's
+console producer hardcodes `ByteArraySerializer`, so choosing
+`ByteArraySerializer` in the form still writes the UTF-8 text; on Kafka 3.x
+the selected serializer class is honored. `ByteArrayDeserializer` in
+`DefaultMessageFormatter` prints the Java `toString()` of `byte[]` (for
+example `[B@…`), not the original text — use `StringSerializer` as the consume
+format when reading text published by this plugin.
 
 ## Known limitations
 

@@ -296,5 +296,21 @@
   "New cluster": "Novo cluster",
   "Kafka ready.": "Kafka pronto.",
   "Kafka: cancelled.": "Kafka: cancelado.",
-  "ByteArraySerializer expects byte[], but the publish form sends text. Leave the serializer empty (String) or use a custom class that encodes the text.": "ByteArraySerializer espera byte[], mas o formulário de publicação envia texto. Deixe o serializador vazio (String) ou use uma classe customizada que codifique o texto."
+  "{format} needs the Confluent serializer jar and a schema registry; the console producer only accepts text. Put the jar in extraClasspath and publish from a schema-aware client.": "{format} precisa do jar do serializador Confluent e de um schema registry; o console producer só aceita texto. Coloque o jar em extraClasspath e publique com um cliente que entenda schema.",
+  "VoidSerializer produces a null value; choose StringSerializer and leave the message value empty instead.": "VoidSerializer produz um valor nulo; escolha StringSerializer e deixe o valor da mensagem vazio.",
+  "Format": "Formato",
+  "Serializer": "Serializador",
+  "Deserializer": "Deserializador",
+  "StringSerializer": "Texto",
+  "ByteArraySerializer": "ByteArray",
+  "IntegerSerializer": "Inteiro",
+  "LongSerializer": "Long",
+  "DoubleSerializer": "Double",
+  "FloatSerializer": "Float",
+  "BytesSerializer": "Bytes",
+  "ByteBufferSerializer": "ByteBuffer",
+  "VoidSerializer": "Nulo",
+  "JsonSerializer": "JSON",
+  "KafkaAvroSerializer": "Avro",
+  "KafkaProtobufSerializer": "Protobuf"
 }

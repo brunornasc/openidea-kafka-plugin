@@ -9,6 +9,7 @@
 
 mod backend;
 mod config;
+mod formats;
 mod i18n;
 mod messages;
 mod model;
@@ -252,7 +253,24 @@ impl Kafka {
             offset: self.prefs.offset.clone(),
             limit,
             timeout_ms: config::timeout_ms(),
+            deserializer_format: config::formats_for(topic).deserializer,
             live: false,
+        }
+    }
+
+    /// Save the formats sent by the HTML page next to the chosen topic.
+    fn remember_formats(&self, payload: &Value) {
+        let topic = payload["topic"]
+            .as_str()
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or(&self.prefs.topic);
+        for (field, kind) in [
+            ("deserializer", "deserializer"),
+            ("serializer", "serializer"),
+        ] {
+            if let Some(value) = payload[field].as_str() {
+                let _ = config::set_format(topic, kind, value);
+            }
         }
     }
 
@@ -269,6 +287,8 @@ impl Kafka {
         );
         value["active"] = json!(config::active_id());
         value["topics"] = json!(self.topic_names);
+        value["formats"] = json!(formats::NAMES);
+        value["topicFormats"] = json!(config::load_formats());
         value["installed"] = json!(config::install_info().map(|i| i.bin));
         // The IDE does not translate HTML bodies: ship the same catalog the
         // IDE uses for the manifest/views so the page can translate itself.
@@ -632,10 +652,12 @@ impl Kafka {
         match action {
             "state" => {}
             "prefs" => {
+                self.remember_formats(payload);
                 self.prefs.patch(payload);
                 self.prefs.save();
             }
             "consume" => {
+                self.remember_formats(payload);
                 let c = self.active()?;
                 let topic = payload["topic"]
                     .as_str()
@@ -687,6 +709,7 @@ impl Kafka {
                 self.note(i18n::t("Messages cleared."));
             }
             "publish" => {
+                self.remember_formats(payload);
                 let c = self.active()?;
                 let topic = payload["topic"].as_str().unwrap_or("").to_owned();
                 let key = payload["key"].as_str().unwrap_or("").to_owned();
@@ -985,6 +1008,7 @@ impl Kafka {
             .topics
             .iter()
             .map(|t| {
+                let chosen = config::formats_for(&t.name);
                 vec![
                     t.name.clone(),
                     t.partitions.to_string(),
@@ -999,11 +1023,13 @@ impl Kafka {
                         })
                         .collect::<Vec<_>>()
                         .join(", "),
+                    chosen.serializer,
+                    chosen.deserializer,
                 ]
             })
             .collect();
         if let Some(sort) = self.sort
-            && sort.column < 5
+            && sort.column < 7
         {
             rows.sort_by(|a, b| {
                 let ord = a[sort.column as usize].cmp(&b[sort.column as usize]);
@@ -1014,10 +1040,18 @@ impl Kafka {
         let range = Viewport::range(viewport, total, 200);
         let shown = rows[range.start as usize..range.end as usize].to_vec();
         let table = Table {
-            columns: ["Topic", "Partitions", "RF", "Configurations", "Leaders"]
-                .iter()
-                .map(|s| (*s).into())
-                .collect(),
+            columns: [
+                "Topic",
+                "Partitions",
+                "RF",
+                "Configurations",
+                "Leaders",
+                "Serializer",
+                "Deserializer",
+            ]
+            .iter()
+            .map(|s| (*s).into())
+            .collect(),
             total_rows: total,
             first_row: range.start,
             rows: shown,
@@ -2202,6 +2236,73 @@ mod tests {
                 .iter()
                 .any(|r| r.program == backend::PRODUCER)
         );
+    }
+
+    #[test]
+    fn format_choices_are_shipped_to_the_html_and_saved_per_topic() {
+        let host = host_with_cluster();
+        active_connection(&host);
+        let mut plugin = Kafka::default();
+        plugin.activate(&host.context("brunornasc.kafka")).unwrap();
+        let state: Value = serde_json::from_str(&plugin.messages_state()).unwrap();
+        assert!(
+            state["formats"]
+                .as_array()
+                .unwrap()
+                .contains(&json!("KafkaProtobufSerializer"))
+        );
+        assert_eq!(state["topicFormats"].as_object().unwrap().len(), 0);
+
+        plugin
+            .handle_messages(
+                ViewEvent::Message(
+                    json!({"action": "prefs", "topic": "pedidos", "serializer": "ByteArraySerializer", "deserializer": "IntegerSerializer"}).to_string(),
+                ),
+                &host.invocation(),
+            )
+            .unwrap();
+        let chosen = config::formats_for("pedidos");
+        assert_eq!(chosen.serializer, "ByteArraySerializer");
+        assert_eq!(chosen.deserializer, "IntegerSerializer");
+        let state: Value = serde_json::from_str(&plugin.messages_state()).unwrap();
+        assert_eq!(
+            state["topicFormats"]["pedidos"]["serializer"],
+            "ByteArraySerializer"
+        );
+        assert_eq!(
+            state["topicFormats"]["pedidos"]["deserializer"],
+            "IntegerSerializer"
+        );
+        assert!(PAGE.contains("id=\"format\""));
+        assert!(PAGE.contains("id=\"pubFormat\""));
+    }
+
+    #[test]
+    fn topics_table_shows_the_chosen_formats() {
+        let host = host_with_cluster();
+        active_connection(&host);
+        config::set_format("pedidos", "serializer", "ByteArraySerializer").unwrap();
+        config::set_format("pedidos", "deserializer", "IntegerSerializer").unwrap();
+        let mut plugin = Kafka::default();
+        plugin.activate(&host.context("brunornasc.kafka")).unwrap();
+        plugin.reload().unwrap();
+        let view = plugin.render_topics(None);
+        let Body::Other { kind, data } = view.body else {
+            panic!("expected sortable table")
+        };
+        assert_eq!(kind, "table", "{kind}");
+        let table: Value = serde_json::from_str(&data).unwrap();
+        let columns = table["columns"].as_array().unwrap();
+        assert!(columns.iter().any(|c| c.as_str() == Some("Serializer")));
+        assert!(columns.iter().any(|c| c.as_str() == Some("Deserializer")));
+        let row = table["rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r[0].as_str() == Some("pedidos"))
+            .unwrap();
+        assert_eq!(row[5].as_str(), Some("ByteArraySerializer"));
+        assert_eq!(row[6].as_str(), Some("IntegerSerializer"));
     }
 
     #[test]

@@ -13,6 +13,7 @@
 //! dos processos é redigida.
 
 use crate::config::{self, Connection};
+use crate::formats;
 use crate::i18n;
 use crate::model::{
     self, ClusterInfo, FIELD_SEP, GroupLag, HEADER_KV, HEADER_SEP, MessageRecord, NULL_MARKER,
@@ -288,8 +289,20 @@ fn execute(
     specific: impl Fn(bool) -> Result<Vec<String>, Error>,
     stdin: Option<&str>,
 ) -> Result<ProcessOutput, Error> {
-    let modern = build(c, tool, true, specific(true)?)?;
-    let legacy = build(c, tool, false, specific(false)?)?;
+    execute_with_trailing(c, tool, specific, |_| Ok(Vec::new()), stdin)
+}
+
+/// Como `execute`, mas com propriedades acrescentadas depois das globais: a
+/// escolha feita na página de mensagens prevalece sobre as settings.
+fn execute_with_trailing(
+    c: &Connection,
+    tool: Tool,
+    specific: impl Fn(bool) -> Result<Vec<String>, Error>,
+    trailing: impl Fn(bool) -> Result<Vec<String>, Error>,
+    stdin: Option<&str>,
+) -> Result<ProcessOutput, Error> {
+    let modern = build_with_trailing(c, tool, true, specific(true)?, trailing(true)?)?;
+    let legacy = build_with_trailing(c, tool, false, specific(false)?, trailing(false)?)?;
     // Um task mantém a chamada viva por até 60 s: a JVM + SASL costumam
     // demorar mais que o orçamento padrão de 5 s do host.
     let task = host::begin_task(
@@ -320,6 +333,16 @@ fn build(
     modern: bool,
     specific: Vec<String>,
 ) -> Result<Vec<String>, Error> {
+    build_with_trailing(c, tool, modern, specific, Vec::new())
+}
+
+fn build_with_trailing(
+    c: &Connection,
+    tool: Tool,
+    modern: bool,
+    specific: Vec<String>,
+    trailing: Vec<String>,
+) -> Result<Vec<String>, Error> {
     let mut args = strings(&["--bootstrap-server", &c.bootstrap_servers]);
     // O arquivo de configuração é propriedade de `client_props`: uma única
     // flag, com o caminho do arquivo gerado ou o arquivo informado pelo usuário.
@@ -337,6 +360,9 @@ fn build(
         args.push(arg);
     }
     args.extend(client_props(c, tool, modern)?);
+    // Propriedades da escolha por tópico vêm por último: a CLI Kafka usa a
+    // última ocorrência de uma chave repetida em `--*-property`.
+    args.extend(trailing);
 
     // Algumas versões do host repetem argumentos ao repassar o comando. Flags
     // de valor único não podem aparecer duas vezes na CLI Kafka (joptsimple
@@ -438,14 +464,12 @@ fn properties_path(c: &Connection) -> Result<Option<String>, Error> {
     Ok(Some(path))
 }
 
-/// Classes de (de)serialização configuradas nas preferências. O tópico não
-/// guarda essa informação: ela é uma escolha do cliente (console tools).
+/// Classes de serialização configuradas globalmente. Deserializadores vão
+/// em `--formatter-property` (ver `formatter_deserializers`): o
+/// `DefaultMessageFormatter` só lê as suas próprias propriedades, não as do
+/// consumidor.
 fn configured_serde(tool: Tool) -> Vec<(String, String)> {
     let pairs: Vec<(&str, String)> = match tool {
-        Tool::Consumer => vec![
-            ("key.deserializer", config::key_deserializer()),
-            ("value.deserializer", config::value_deserializer()),
-        ],
         Tool::Producer => vec![
             ("key.serializer", config::key_serializer()),
             ("value.serializer", config::value_serializer()),
@@ -722,6 +746,8 @@ pub struct ConsumeOptions {
     pub offset: String,
     pub limit: u32,
     pub timeout_ms: u32,
+    /// Formato escolhido para aquele tópico na página de mensagens.
+    pub deserializer_format: String,
     /// Quando `true`, não limita mensagens nem timeout (log ao vivo).
     pub live: bool,
 }
@@ -735,15 +761,58 @@ fn formatter_args(flag: &str, properties: &[String]) -> Vec<String> {
     out
 }
 
+/// Classes que o `DefaultMessageFormatter` usa para decodificar chave/valor.
+/// Vão em `--formatter-property` (não em `--command-property`): o formatter
+/// só lê as suas próprias propriedades. Configurações globais servem como
+/// fallback quando o formato escolhido é o padrão `String`.
+fn formatter_deserializers(format: &str) -> [String; 2] {
+    let format = formats::normalize(format);
+    let default = formats::deserializer_class(&format);
+    let custom = format == formats::STRING;
+    let key = if custom && !config::key_deserializer().is_empty() {
+        config::key_deserializer()
+    } else {
+        default.into()
+    };
+    let value = if custom && !config::value_deserializer().is_empty() {
+        config::value_deserializer()
+    } else {
+        default.into()
+    };
+    [
+        format!("key.deserializer={key}"),
+        format!("value.deserializer={value}"),
+    ]
+}
+
+/// Serializer classes chosen in the Messages view. Kafka 4.x overrides them
+/// with ByteArraySerializer, but on 3.x they are honored and the values are
+/// the standard wire representation of the form text. They are appended after
+/// the global settings so this per-topic choice wins.
+fn serializer_props(modern: bool, format: &str) -> Vec<String> {
+    let flag = if modern {
+        "--command-property"
+    } else {
+        "--producer-property"
+    };
+    let class = formats::serializer_class(format);
+    strings(&[
+        flag,
+        &format!("key.serializer={class}"),
+        flag,
+        &format!("value.serializer={class}"),
+    ])
+}
+
 /// Leitura estruturada: separadores de controle preservam valores com tabs,
 /// vírgulas e quebras de linha.
-fn formatter_props(modern: bool) -> Vec<String> {
+fn formatter_props(modern: bool, format: &str) -> Vec<String> {
     let flag = if modern {
         "--formatter-property"
     } else {
         "--property"
     };
-    let properties = [
+    let mut properties = vec![
         "print.timestamp=true".into(),
         "print.partition=true".into(),
         "print.offset=true".into(),
@@ -755,17 +824,18 @@ fn formatter_props(modern: bool) -> Vec<String> {
         format!("headers.separator={HEADER_SEP}"),
         format!("null.literal={NULL_MARKER}"),
     ];
+    properties.extend(formatter_deserializers(format));
     formatter_args(flag, &properties)
 }
 
 /// Log ao vivo: formato legível para humanos (a aba de log não é parseada).
-fn live_formatter_props(modern: bool) -> Vec<String> {
+fn live_formatter_props(modern: bool, format: &str) -> Vec<String> {
     let flag = if modern {
         "--formatter-property"
     } else {
         "--property"
     };
-    let properties = [
+    let mut properties = vec![
         "print.timestamp=true".into(),
         "print.partition=true".into(),
         "print.offset=true".into(),
@@ -776,6 +846,7 @@ fn live_formatter_props(modern: bool) -> Vec<String> {
         "headers.separator=, ".into(),
         "null.literal=∅".into(),
     ];
+    properties.extend(formatter_deserializers(format));
     formatter_args(flag, &properties)
 }
 
@@ -802,9 +873,9 @@ pub fn consume_args(
         args.extend(strings(&["--timeout-ms", &opts.timeout_ms.to_string()]));
     }
     args.extend(if opts.live {
-        live_formatter_props(modern)
+        live_formatter_props(modern, &opts.deserializer_format)
     } else {
-        formatter_props(modern)
+        formatter_props(modern, &opts.deserializer_format)
     });
     build(c, Tool::Consumer, modern, args)
 }
@@ -900,22 +971,15 @@ pub fn publish(c: &Connection, msg: &PublishMessage) -> Result<(), Error> {
     if msg.topic.trim().is_empty() {
         return Err(i18n::t("Choose a topic to publish to.").into());
     }
-    // O console producer entrega `String` ao serializador; ByteArraySerializer
-    // espera `byte[]` e falharia com um ClassCastException obscurecido.
-    if configured_serde(Tool::Producer)
-        .iter()
-        .any(|(_, class)| class.rsplit('.').next() == Some("ByteArraySerializer"))
-    {
-        return Err(i18n::t(
-            "ByteArraySerializer expects byte[], but the publish form sends text. Leave the serializer empty (String) or use a custom class that encodes the text.",
-        )
-        .into());
-    }
-    if msg.partition.is_some() {
-        return publish_with_kcat(c, msg);
-    }
+    // Formatos que não podem ser produzidos a partir de um campo de texto
+    // (Avro/Protobuf/Void) falham aqui com uma explicação, não no JVM.
+    let format = config::formats_for(&msg.topic).serializer;
+    formats::serialize_text(&format, &msg.value)?;
     let msg = msg.clone();
-    execute(
+    if msg.partition.is_some() {
+        return publish_with_kcat(c, &msg);
+    }
+    execute_with_trailing(
         c,
         Tool::Producer,
         |_| {
@@ -929,6 +993,7 @@ pub fn publish(c: &Connection, msg: &PublishMessage) -> Result<(), Error> {
                 args
             })
         },
+        |modern| Ok(serializer_props(modern, &format)),
         Some(&publish_input(&msg)),
     )?;
     Ok(())
@@ -1322,7 +1387,7 @@ mod tests {
         let c = connection();
 
         host.on_process(CONSUMER, |args, _| {
-            assert!(args.iter().any(|a| a == "--command-property"));
+            assert!(args.iter().any(|a| a == "--formatter-property"));
             assert!(
                 args.iter()
                     .any(|a| a == "key.deserializer=org.example.KeyDeserializer")
@@ -1331,6 +1396,9 @@ mod tests {
                 args.iter()
                     .any(|a| a == "value.deserializer=org.example.ValueDeserializer")
             );
+            let joined = args.join("|");
+            assert!(!joined.contains("--command-property|key.deserializer="));
+            assert!(!joined.contains("--command-property|value.deserializer="));
             ok("")
         });
         host.on_process(PRODUCER, |args, _| {
@@ -1372,13 +1440,17 @@ mod tests {
     }
 
     #[test]
-    fn byte_array_serializer_is_rejected_with_a_clear_message() {
+    fn byte_array_serializer_is_accepted_as_wire_text() {
         let host = crate::mock_host();
-        host.set_setting(
-            "valueSerializer",
-            r#""org.apache.kafka.common.serialization.ByteArraySerializer""#,
-        );
-        let err = publish(
+        config::set_format("t", "serializer", "ByteArraySerializer").unwrap();
+        host.on_process(PRODUCER, |args, stdin| {
+            assert!(args.iter().any(|a| {
+                a == "value.serializer=org.apache.kafka.common.serialization.ByteArraySerializer"
+            }));
+            assert_eq!(stdin.unwrap(), "v\n");
+            ok("")
+        });
+        publish(
             &connection(),
             &PublishMessage {
                 topic: "t".into(),
@@ -1386,8 +1458,42 @@ mod tests {
                 ..PublishMessage::default()
             },
         )
-        .unwrap_err();
-        assert!(err.to_string().contains("expects byte[]"), "{err}");
+        .unwrap();
+    }
+
+    #[test]
+    fn chosen_format_wins_over_global_serializer_and_uses_legacy_flag() {
+        let host = crate::mock_host();
+        host.set_setting("valueSerializer", r#""org.example.GlobalSerializer""#);
+        config::set_format("t", "serializer", "LongSerializer").unwrap();
+        host.on_process(PRODUCER, |args, _| {
+            if args.iter().any(|a| a == "--command-property") {
+                return Ok(ProcessOutput {
+                    status: Some(1),
+                    stdout: String::new(),
+                    stderr: "unrecognized option: --command-property".into(),
+                });
+            }
+            assert!(args.iter().any(|a| a == "--producer-property"));
+            let serializers: Vec<_> = args
+                .iter()
+                .filter(|a| a.starts_with("value.serializer="))
+                .collect();
+            assert_eq!(
+                serializers.last().unwrap().as_str(),
+                "value.serializer=org.apache.kafka.common.serialization.LongSerializer"
+            );
+            ok("")
+        });
+        publish(
+            &connection(),
+            &PublishMessage {
+                topic: "t".into(),
+                value: "v".into(),
+                ..PublishMessage::default()
+            },
+        )
+        .unwrap();
     }
 
     #[test]
@@ -1544,6 +1650,74 @@ mod tests {
         assert!(info.bin.ends_with("/kafka_2.13-4.1.2/bin"));
         assert!(!installed_scripts().is_empty());
         assert_eq!(config::install_info(), Some(info));
+    }
+
+    #[test]
+    fn chosen_formats_reach_both_console_tools() {
+        let host = crate::mock_host();
+        config::set_format("t", "serializer", "ByteArraySerializer").unwrap();
+        config::set_format("t", "deserializer", "IntegerSerializer").unwrap();
+        let c = connection();
+
+        host.on_process(PRODUCER, |args, stdin| {
+            assert!(args.iter().any(|a| {
+                a == "value.serializer=org.apache.kafka.common.serialization.ByteArraySerializer"
+            }));
+            assert!(stdin.unwrap().contains("hello"));
+            ok("")
+        });
+        publish(
+            &c,
+            &PublishMessage {
+                topic: "t".into(),
+                value: "hello".into(),
+                ..PublishMessage::default()
+            },
+        )
+        .unwrap();
+
+        host.on_process(CONSUMER, |args, _| {
+            assert!(args.iter().any(|a| a == "--formatter-property"));
+            assert!(
+                args.iter()
+                    .any(|a| a == "value.deserializer=org.apache.kafka.common.serialization.IntegerDeserializer")
+            );
+            let record = format!(
+                "CreateTime:1{FIELD_SEP}Partition:0{FIELD_SEP}Offset:0{FIELD_SEP}NO_HEADERS{FIELD_SEP}{NULL_MARKER}{FIELD_SEP}42{RECORD_SEP}"
+            );
+            ok(&record)
+        });
+        let messages = consume(
+            &c,
+            &ConsumeOptions {
+                topic: "t".into(),
+                deserializer_format: config::formats_for("t").deserializer,
+                ..ConsumeOptions::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(messages[0].value.as_deref(), Some("42"));
+    }
+
+    #[test]
+    fn wire_text_is_preserved_for_display() {
+        let host = crate::mock_host();
+        host.on_process(CONSUMER, |_, _| {
+            let record = format!(
+                "CreateTime:1{FIELD_SEP}Partition:0{FIELD_SEP}Offset:0{FIELD_SEP}NO_HEADERS{FIELD_SEP}{NULL_MARKER}{FIELD_SEP}aGVsbG8={RECORD_SEP}"
+            );
+            ok(&record)
+        });
+        let messages = consume(
+            &connection(),
+            &ConsumeOptions {
+                topic: "t".into(),
+                deserializer_format: "StringSerializer".into(),
+                ..ConsumeOptions::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(messages[0].value.as_deref(), Some("aGVsbG8="));
     }
 
     #[test]

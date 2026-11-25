@@ -102,6 +102,7 @@
       </label>
       <label><span data-i18n>Offset</span> <input id="offset" type="text" size="8" data-i18n-ph="Offset" placeholder="Offset"></label>
       <label><span data-i18n>Partition</span> <input id="partition" type="text" size="5" data-i18n-ph="all" placeholder="all"></label>
+      <label><span data-i18n>Format</span> <select id="format"></select></label>
       <label><span data-i18n>Limit</span> <input id="limit" type="number" min="1" max="5000" style="width:70px"></label>
       <button id="consume" class="primary" data-i18n>Consume</button>
       <button id="live" data-i18n>Live</button>
@@ -132,6 +133,7 @@
     <div class="grid2">
       <label><span data-i18n>Key</span> <input id="pubKey" type="text" data-i18n-ph="optional" placeholder="optional"></label>
       <label><span data-i18n>Partition</span> <input id="pubPartition" type="text" data-i18n-ph="automatic (requires kcat)" placeholder="automatic (requires kcat)"></label>
+      <label><span data-i18n>Format</span> <select id="pubFormat"></select></label>
     </div>
     <label><span data-i18n>Headers (key=value, …)</span> <input id="pubHeaders" type="text" data-i18n-ph="trace=abc,tenant=acme" placeholder="trace=abc,tenant=acme"></label>
     <textarea id="pubValue" data-i18n-ph="Message value" placeholder="Message value"></textarea>
@@ -146,7 +148,7 @@
 (function () {
   const $ = (id) => document.getElementById(id);
   const post = (message) => openidea.postMessage(JSON.stringify(message));
-  let state = { prefs: {}, messages: [], topics: [], connections: [], active: null, i18n: {} };
+  let state = { prefs: {}, messages: [], topics: [], formats: [], topicFormats: {}, connections: [], active: null, i18n: {} };
 
   const T = (text) => (state.i18n && Object.prototype.hasOwnProperty.call(state.i18n, text) && state.i18n[text]) || text;
   const TF = (text, values) => {
@@ -183,6 +185,8 @@
     timeFrom: $('timeFrom').value,
     timeTo: $('timeTo').value,
     caseSensitive: $('caseSensitive').checked,
+    deserializer: $('format').value,
+    serializer: $('pubFormat').value,
   });
 
   const esc = (s) => String(s == null ? '' : s)
@@ -207,11 +211,26 @@
     else if (!topics.length) sel.value = '';
   }
 
+  function fillFormats(select, selected) {
+    select.innerHTML = '';
+    const formats = state.formats && state.formats.length ? state.formats : ['StringSerializer'];
+    for (const format of formats) {
+      const option = document.createElement('option');
+      option.value = format;
+      option.textContent = T(format);
+      select.appendChild(option);
+    }
+    select.value = formats.indexOf(selected) >= 0 ? selected : 'StringSerializer';
+  }
+
   function render(s) {
     state = s || state;
     applyI18n();
     const p = state.prefs || {};
     fillTopics(p.topic || $('topic').value);
+    const chosen = (state.topicFormats || {})[p.topic || $('topic').value] || {};
+    fillFormats($('format'), chosen.deserializer || 'StringSerializer');
+    fillFormats($('pubFormat'), chosen.serializer || 'StringSerializer');
     $('partition').value = p.partition || '';
     $('start').value = p.start || 'end';
     $('offset').value = p.offset || '';
@@ -273,8 +292,12 @@
     value: $('pubValue').value,
     headers: $('pubHeaders').value,
     partition: $('pubPartition').value,
+    serializer: $('pubFormat').value,
   }));
   $('topic').addEventListener('change', () => post({ action: 'prefs', topic: $('topic').value }));
+  for (const id of ['format', 'pubFormat']) {
+    $(id).addEventListener('change', () => sendPrefs('prefs'));
+  }
   for (const id of ['filterText', 'filterKey', 'filterHeader', 'offsetFrom', 'offsetTo', 'timeFrom', 'timeTo']) {
     $(id).addEventListener('change', () => sendPrefs('prefs'));
   }

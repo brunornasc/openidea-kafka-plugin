@@ -7,15 +7,18 @@
 //! nomes sensíveis são recusadas e qualquer saída de erro é redigida antes de
 //! ser mostrada ou registrada.
 
+use crate::formats;
 use crate::i18n;
 use openidea_plugin::{Error, host};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use std::collections::BTreeMap;
 
 pub const PROFILES_KEY: &str = "kafka:profiles";
 pub const ACTIVE_KEY: &str = "kafka:active";
 pub const INSTALL_KEY: &str = "kafka:install";
 pub const PREFS_KEY: &str = "kafka:prefs";
+pub const FORMATS_KEY: &str = "kafka:formats";
 
 pub const SECURITY_PROTOCOLS: [&str; 4] = ["PLAINTEXT", "SSL", "SASL_PLAINTEXT", "SASL_SSL"];
 pub const SASL_MECHANISMS: [&str; 4] = ["", "PLAIN", "SCRAM-SHA-256", "SCRAM-SHA-512"];
@@ -539,6 +542,73 @@ impl ConsumePrefs {
     }
 }
 
+// ------------------------------------------------------------ topic formats
+
+/// Formatos escolhidos para um tópico na página de mensagens. O tópico em si
+/// só contém bytes: esta é uma preferência do cliente, guardada por nome.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct TopicFormats {
+    pub serializer: String,
+    pub deserializer: String,
+}
+
+impl Default for TopicFormats {
+    fn default() -> Self {
+        Self {
+            serializer: formats::STRING.into(),
+            deserializer: formats::STRING.into(),
+        }
+    }
+}
+
+pub fn load_formats() -> BTreeMap<String, TopicFormats> {
+    let Ok(Some(raw)) = host::storage::get(FORMATS_KEY) else {
+        return BTreeMap::new();
+    };
+    serde_json::from_str(&raw).unwrap_or_default()
+}
+
+pub fn formats_for(topic: &str) -> TopicFormats {
+    let defaults = TopicFormats::default();
+    let Some(entry) = load_formats().remove(topic) else {
+        return defaults;
+    };
+    TopicFormats {
+        serializer: if entry.serializer.trim().is_empty() {
+            defaults.serializer
+        } else {
+            formats::normalize(&entry.serializer)
+        },
+        deserializer: if entry.deserializer.trim().is_empty() {
+            defaults.deserializer
+        } else {
+            formats::normalize(&entry.deserializer)
+        },
+    }
+}
+
+/// Guarda `serializer` ou `deserializer` para o tópico. Um tópico vazio é
+/// ignorado: a página envia formatos junto com o filtro antes de escolher um.
+pub fn set_format(topic: &str, kind: &str, format: &str) -> Result<(), Error> {
+    let topic = topic.trim();
+    if topic.is_empty() {
+        return Ok(());
+    }
+    let format = formats::normalize(format);
+    let mut all = load_formats();
+    let entry = all.entry(topic.to_owned()).or_default();
+    match kind {
+        "serializer" => entry.serializer = format,
+        "deserializer" => entry.deserializer = format,
+        _ => return Ok(()),
+    }
+    host::storage::set(
+        FORMATS_KEY,
+        &serde_json::to_string(&all).map_err(|e| e.to_string())?,
+    )
+}
+
 // ---------------------------------------------------------------- settings
 
 pub fn setting_str(key: &str, default: &str) -> String {
@@ -700,6 +770,25 @@ mod tests {
         assert!(kcat.contains(&("sasl.username".into(), "dev".into())));
         assert!(kcat.contains(&("ssl.ca.location".into(), "/etc/kafka/ca.pem".into())));
         assert!(kcat.iter().all(|(k, _)| !is_secret_key(k)));
+    }
+
+    #[test]
+    fn topic_formats_are_persisted_and_default_to_string() {
+        let _host = crate::mock_host();
+        assert_eq!(formats_for("pedidos").serializer, "StringSerializer");
+        set_format("pedidos", "serializer", "ByteArraySerializer").unwrap();
+        set_format("pedidos", "deserializer", "IntegerSerializer").unwrap();
+        set_format("", "serializer", "JsonSerializer").unwrap();
+        let chosen = formats_for("pedidos");
+        assert_eq!(chosen.serializer, "ByteArraySerializer");
+        assert_eq!(chosen.deserializer, "IntegerSerializer");
+        assert_eq!(formats_for("outros").serializer, "StringSerializer");
+        assert!(
+            host::storage::get(FORMATS_KEY)
+                .unwrap()
+                .unwrap()
+                .contains("pedidos")
+        );
     }
 
     #[test]
