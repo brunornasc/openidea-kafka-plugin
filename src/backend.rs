@@ -1078,11 +1078,104 @@ fn valid_version(version: &str) -> bool {
         && version.chars().all(|c| c.is_ascii_digit() || c == '.')
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DownloadStep {
+    Complete,
+    Incomplete,
+}
+
+/// Uma chamada do host dura no máximo 60 s. O tarball tem ~130 MB, então o
+/// curl recebe `--max-time 50` e retoma de onde parou (`-C -`) na chamada
+/// seguinte. `Incomplete` não é erro: o download continua no agendador.
+fn download_step(version: &str, tarball: &str, task: &host::Task) -> Result<DownloadStep, Error> {
+    task.report(
+        1,
+        Some(3),
+        Some(&i18n::t("Downloading the Apache Kafka tarball")),
+    );
+    let url = config::download_url(version);
+    let mut args = strings(&[
+        "-fL",
+        "--retry",
+        "2",
+        "--connect-timeout",
+        "20",
+        "--max-time",
+        "50",
+    ]);
+    if host::fs::stat(tarball).is_ok() {
+        args.extend(strings(&["-C", "-"]));
+    }
+    args.extend(strings(&["-o", tarball, &url]));
+    let out = raw(CURL, &args, None).map_err(friendly)?;
+    if task.is_cancelled() {
+        return Err(Error::Cancelled);
+    }
+    match out.status {
+        Some(0) => Ok(DownloadStep::Complete),
+        // 18: transferência parcial; 28: `--max-time`; 56: rede caiu.
+        Some(18) | Some(28) | Some(56) => Ok(DownloadStep::Incomplete),
+        _ => {
+            let detail = config::redact(&format!("{}\n{}", out.stdout, out.stderr))
+                .lines()
+                .filter(|l| !l.trim().is_empty())
+                .take(4)
+                .collect::<Vec<_>>()
+                .join(" | ");
+            Err(i18n::tf(
+                "Could not download {url}: {detail}. Check kafkaVersion and downloadUrl.",
+                &[("url", &url), ("detail", &clip(&detail, 400))],
+            )
+            .into())
+        }
+    }
+}
+
+fn finish_install(
+    version: &str,
+    dir: &str,
+    root: &str,
+    bin: &str,
+    tarball: &str,
+    task: &host::Task,
+) -> Result<config::InstallInfo, Error> {
+    task.report(2, Some(3), Some(&i18n::t("Extracting the distribution")));
+    run(TAR, &strings(&["-xzf", tarball, "-C", dir]), None)?;
+    task.report(3, Some(3), Some(&i18n::t("Verifying the scripts")));
+    let expected = format!("{bin}/{TOPICS}");
+    host::fs::stat(&expected).map_err(|_| {
+        i18n::tf(
+            "The extraction finished, but {path} was not found. Check the downloaded tarball.",
+            &[("path", &expected)],
+        )
+    })?;
+    let info = config::InstallInfo {
+        version: version.into(),
+        dir: root.into(),
+        bin: bin.into(),
+    };
+    config::set_install_info(&info)?;
+    config::clear_pending_install();
+    Ok(info)
+}
+
 /// Baixa e extrai a distribuição binária do Apache Kafka em `plugin-dir`.
-/// Nenhum `fs.*` é necessário: o plugin-dir é privado do plugin.
-pub fn install(version: &str, force: bool) -> Result<config::InstallInfo, Error> {
+/// `Ok(None)` significa que o download passou do limite de tempo e será
+/// retomado automaticamente; nenhum erro é mostrado ao usuário nesse caso.
+pub fn install(version: &str, force: bool) -> Result<Option<config::InstallInfo>, Error> {
     if !valid_version(version) {
         return Err(i18n::tf("Invalid version: {version}.", &[("version", version)]).into());
+    }
+    // Um segundo clique durante o download retoma o mesmo arquivo; dois curls
+    // escrevendo no mesmo `.tgz` corromperiam o tarball.
+    if config::pending_install().map_or(false, |pending| pending.version == version)
+        && let Ok(finished) = resume_install()
+    {
+        return Ok(if finished {
+            config::install_info()
+        } else {
+            None
+        });
     }
     let dir = host::fs::plugin_dir()?;
     let root = format!("{}/kafka_2.13-{version}", dir.trim_end_matches('/'));
@@ -1094,53 +1187,72 @@ pub fn install(version: &str, force: bool) -> Result<config::InstallInfo, Error>
             bin,
         };
         config::set_install_info(&info)?;
-        return Ok(info);
+        config::clear_pending_install();
+        return Ok(Some(info));
     }
-    let url = config::download_url(version);
     let tarball = format!("{dir}/kafka_2.13-{version}.tgz");
+    config::set_pending_install(version, &tarball)?;
     let task = host::begin_task(
         &i18n::tf("Kafka: installing {version}", &[("version", version)]),
         true,
     );
-    task.report(
-        1,
-        Some(3),
-        Some(&i18n::t("Downloading the Apache Kafka tarball")),
-    );
-    run(
-        CURL,
-        &strings(&[
-            "-fL",
-            "--retry",
-            "3",
-            "--connect-timeout",
-            "20",
-            "-o",
-            &tarball,
-            &url,
-        ]),
-        None,
-    )?;
-    if task.is_cancelled() {
-        return Err(Error::Cancelled);
+    match download_step(version, &tarball, &task) {
+        Ok(DownloadStep::Complete) => {
+            finish_install(version, &dir, &root, &bin, &tarball, &task).map(Some)
+        }
+        Ok(DownloadStep::Incomplete) => Ok(None),
+        Err(e) => {
+            config::clear_pending_install();
+            Err(e)
+        }
     }
-    task.report(2, Some(3), Some(&i18n::t("Extracting the distribution")));
-    run(TAR, &strings(&["-xzf", &tarball, "-C", &dir]), None)?;
-    task.report(3, Some(3), Some(&i18n::t("Verifying the scripts")));
-    let expected = format!("{bin}/{TOPICS}");
-    host::fs::stat(&expected).map_err(|_| {
-        i18n::tf(
-            "The extraction finished, but {path} was not found. Check the downloaded tarball.",
-            &[("path", &expected)],
-        )
-    })?;
-    let info = config::InstallInfo {
-        version: version.into(),
-        dir: root,
-        bin: bin.clone(),
+}
+
+/// Continua um download pendente. Chamado a cada 60 s pelo evento agendado.
+/// Retorna `true` quando a instalação terminou nesta chamada.
+pub fn resume_install() -> Result<bool, Error> {
+    let Some(pending) = config::pending_install() else {
+        return Ok(false);
     };
-    config::set_install_info(&info)?;
-    Ok(info)
+    if !valid_version(&pending.version) {
+        config::clear_pending_install();
+        return Ok(false);
+    }
+    let dir = host::fs::plugin_dir()?;
+    let root = format!(
+        "{}/kafka_2.13-{}",
+        dir.trim_end_matches('/'),
+        pending.version
+    );
+    let bin = format!("{root}/bin");
+    if host::fs::stat(&format!("{bin}/{TOPICS}")).is_ok() {
+        let info = config::InstallInfo {
+            version: pending.version.clone(),
+            dir: root,
+            bin,
+        };
+        config::set_install_info(&info)?;
+        config::clear_pending_install();
+        return Ok(true);
+    }
+    let task = host::begin_task(
+        &i18n::tf(
+            "Kafka: resuming {version}",
+            &[("version", &pending.version)],
+        ),
+        false,
+    );
+    match download_step(&pending.version, &pending.tarball, &task) {
+        Ok(DownloadStep::Complete) => {
+            finish_install(&pending.version, &dir, &root, &bin, &pending.tarball, &task)?;
+            Ok(true)
+        }
+        Ok(DownloadStep::Incomplete) => Ok(false),
+        Err(e) => {
+            config::clear_pending_install();
+            Err(e)
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default)]
@@ -1640,16 +1752,53 @@ mod tests {
         host.on_process(CURL, |args, _| {
             assert!(args.iter().any(|a| a.ends_with(".tgz")));
             assert!(args.iter().any(|a| a.starts_with("https://")));
+            // O tarball leva mais que os 60 s da chamada: limita e retoma.
+            assert!(args.iter().any(|a| a == "--max-time"));
+            assert!(args.iter().any(|a| a == "50"));
             ok("")
         });
         host.on_process(TAR, |args, _| {
             assert!(args.contains(&"-xzf".to_owned()));
             ok("")
         });
-        let info = install("4.1.2", true).unwrap();
+        let info = install("4.1.2", true).unwrap().unwrap();
         assert!(info.bin.ends_with("/kafka_2.13-4.1.2/bin"));
         assert!(!installed_scripts().is_empty());
         assert_eq!(config::install_info(), Some(info));
+        assert_eq!(config::pending_install(), None);
+    }
+
+    #[test]
+    fn a_timed_out_download_is_resumed_automatically() {
+        let host = crate::mock_host();
+        let dir = host::fs::plugin_dir().unwrap();
+        let script = format!("{dir}/kafka_2.13-4.1.2/bin/kafka-topics.sh");
+        host.add_external_file(&script, "#!/bin/sh\n");
+        let calls = std::sync::atomic::AtomicUsize::new(0);
+        host.on_process(CURL, move |args, _| {
+            assert!(args.iter().any(|a| a == "--max-time"));
+            if calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
+                Ok(ProcessOutput {
+                    status: Some(28),
+                    stdout: String::new(),
+                    stderr: "Operation timed out after 50000 ms".into(),
+                })
+            } else {
+                assert!(
+                    args.windows(2).any(|w| w[0] == "-C" && w[1] == "-"),
+                    "the resume must reuse the partial file"
+                );
+                ok("")
+            }
+        });
+        host.on_process(TAR, |_, _| ok(""));
+
+        assert_eq!(install("4.1.2", true).unwrap(), None);
+        let pending = config::pending_install().unwrap();
+        assert_eq!(pending.version, "4.1.2");
+        assert!(resume_install().unwrap());
+        assert_eq!(config::pending_install(), None);
+        assert_eq!(config::install_info().unwrap().version, "4.1.2");
     }
 
     #[test]

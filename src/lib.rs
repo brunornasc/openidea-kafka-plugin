@@ -427,7 +427,15 @@ impl Kafka {
                         &i18n::t("Version catalog unavailable."),
                     )?
                 };
-                let info = backend::install(&version, false)?;
+                let Some(info) = backend::install(&version, false)? else {
+                    let text = i18n::tf(
+                        "Kafka {version} is downloading in the background. It resumes automatically every minute; the Install view shows the progress.",
+                        &[("version", &version)],
+                    );
+                    host::notify(NotificationLevel::Info, "Kafka", &text);
+                    Self::refresh_all();
+                    return Ok(Some(text));
+                };
                 self.backend = Some(backend::check_backend());
                 Self::refresh_all();
                 let scripts = backend::installed_scripts()
@@ -779,7 +787,28 @@ impl Plugin for Kafka {
 
     fn handle_events(&mut self, events: &[Event], _ctx: &Invocation) {
         for event in events {
-            if matches!(event, Event::Scheduled) && config::setting_bool("autoRefresh", false) {
+            if !matches!(event, Event::Scheduled) {
+                continue;
+            }
+            let was_pending = config::pending_install().is_some();
+            match backend::resume_install() {
+                Ok(true) => {
+                    if let Some(info) = config::install_info() {
+                        let version = info.version.clone();
+                        host::notify(
+                            NotificationLevel::Info,
+                            "Kafka",
+                            &i18n::tf("CLI {version} installed.", &[("version", &version)]),
+                        );
+                    }
+                    self.backend = Some(backend::check_backend());
+                    Self::refresh_all();
+                }
+                Ok(false) => {}
+                Err(_) => Self::refresh_all(),
+            }
+            // Enquanto baixa, não gasta o orçamento da chamada com `reload`.
+            if !was_pending && config::setting_bool("autoRefresh", false) {
                 let _ = self.reload();
                 Self::refresh_all();
             }
@@ -1421,6 +1450,13 @@ impl Kafka {
                 i18n::t("Distribution"),
                 i18n::t("not installed"),
                 i18n::t("Use 'Download and install'"),
+            ]);
+        }
+        if let Some(pending) = config::pending_install() {
+            rows.push(vec![
+                i18n::t("Download"),
+                i18n::tf("Apache Kafka {version}", &[("version", &pending.version)]),
+                i18n::t("resuming automatically"),
             ]);
         }
         if let Some(status) = &self.backend {

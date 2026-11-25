@@ -17,6 +17,7 @@ use std::collections::BTreeMap;
 pub const PROFILES_KEY: &str = "kafka:profiles";
 pub const ACTIVE_KEY: &str = "kafka:active";
 pub const INSTALL_KEY: &str = "kafka:install";
+pub const PENDING_INSTALL_KEY: &str = "kafka:pending-install";
 pub const PREFS_KEY: &str = "kafka:prefs";
 pub const FORMATS_KEY: &str = "kafka:formats";
 
@@ -422,6 +423,34 @@ pub fn set_install_info(info: &InstallInfo) -> Result<(), Error> {
         INSTALL_KEY,
         &serde_json::to_string(info).map_err(|e| e.to_string())?,
     )
+}
+
+/// Download interrompido pelo limite de tempo de uma chamada: continua nos
+/// eventos agendados, retomando o arquivo com `curl -C -`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PendingInstall {
+    pub version: String,
+    pub tarball: String,
+}
+
+pub fn pending_install() -> Option<PendingInstall> {
+    let raw = host::storage::get(PENDING_INSTALL_KEY).ok().flatten()?;
+    serde_json::from_str(&raw).ok()
+}
+
+pub fn set_pending_install(version: &str, tarball: &str) -> Result<(), Error> {
+    let pending = PendingInstall {
+        version: version.into(),
+        tarball: tarball.into(),
+    };
+    host::storage::set(
+        PENDING_INSTALL_KEY,
+        &serde_json::to_string(&pending).map_err(|e| e.to_string())?,
+    )
+}
+
+pub fn clear_pending_install() {
+    let _ = host::storage::delete(PENDING_INSTALL_KEY);
 }
 
 /// Preferências do visualizador de mensagens.

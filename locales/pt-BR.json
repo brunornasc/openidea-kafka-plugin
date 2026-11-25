@@ -312,5 +312,9 @@
   "VoidSerializer": "Nulo",
   "JsonSerializer": "JSON",
   "KafkaAvroSerializer": "Avro",
-  "KafkaProtobufSerializer": "Protobuf"
+  "KafkaProtobufSerializer": "Protobuf",
+  "Download": "Download",
+  "resuming automatically": "retomando automaticamente",
+  "Kafka {version} is downloading in the background. It resumes automatically every minute; the Install view shows the progress.": "O Kafka {version} está sendo baixado em segundo plano. O download retoma automaticamente a cada minuto; a tela Install mostra o progresso.",
+  "Could not download {url}: {detail}. Check kafkaVersion and downloadUrl.": "Não foi possível baixar {url}: {detail}. Verifique kafkaVersion e downloadUrl."
 }

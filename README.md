@@ -44,7 +44,11 @@ OpenIDEA (WASM) --host::run_process--> kafka-topics.sh / console-consumer.sh / �
    `net:downloads.apache.org` capability is granted, otherwise the built-in
    list 4.4.0 → 3.6.2), downloads `kafka_2.13-<version>.tgz` with `curl` and
    extracts it with `tar` into the plugin's private directory
-   (`host::fs::plugin_dir()`).
+   (`host::fs::plugin_dir()`). A host call lasts at most 60 s and the tarball is
+   ~130 MB: `curl` is bounded to 50 s per call and resumes with `-C -` on the
+   next scheduled tick, so a slow download completes on its own instead of
+   being thrown away. The Install view shows a "resuming automatically" row
+   while it is in progress.
  2. The installed distribution is launched directly as
     `java -cp <plugin-dir>/kafka_2.13-<version>/libs/* <MainClass> …`, so no
     `process:*.sh` grant is needed and scripts approved before installation do
