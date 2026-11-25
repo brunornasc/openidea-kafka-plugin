@@ -3,6 +3,7 @@
 use crate::config::{self, ConsumePrefs};
 use crate::model::MessageRecord;
 use serde_json::json;
+use std::collections::HashSet;
 
 #[derive(Clone, Debug, Default)]
 pub struct MessageBuffer {
@@ -12,9 +13,33 @@ pub struct MessageBuffer {
     pub last_error: Option<String>,
     /// Quantas mensagens foram lidas desde a última limpeza.
     pub total_read: usize,
+    /// Mensagens marcadas como lidas (`ack` local, sem commitar offset).
+    pub acked: HashSet<String>,
 }
 
 impl MessageBuffer {
+    /// `ack` é local: só marca a mensagem como lida, sem commitar offset.
+    pub fn is_acked(&self, record: &MessageRecord) -> bool {
+        self.acked.contains(&config::ack_key(
+            &self.connection,
+            &self.topic,
+            record.partition,
+            record.offset,
+        ))
+    }
+
+    pub fn toggle_ack(&mut self, partition: i32, offset: i64) -> bool {
+        let key = config::ack_key(&self.connection, &self.topic, partition, offset);
+        let acked = if self.acked.remove(&key) {
+            false
+        } else {
+            self.acked.insert(key);
+            true
+        };
+        config::save_acked(&self.acked);
+        acked
+    }
+
     pub fn append(&mut self, connection: &str, topic: &str, records: Vec<MessageRecord>) {
         if self.connection != connection || self.topic != topic {
             self.records.clear();
@@ -54,6 +79,9 @@ impl MessageBuffer {
         self.records
             .iter()
             .filter(|m| {
+                if prefs.hide_acked && self.is_acked(m) {
+                    return false;
+                }
                 if !text.is_empty() && !norm(m.value.as_deref().unwrap_or("")).contains(&text) {
                     return false;
                 }
@@ -106,6 +134,7 @@ impl MessageBuffer {
                     "key": m.key,
                     "value": m.value,
                     "headers": m.headers.iter().map(|(k, v)| json!({"key": k, "value": v})).collect::<Vec<_>>(),
+                    "acked": self.is_acked(m),
                 })
             })
             .collect();
@@ -119,6 +148,7 @@ impl MessageBuffer {
             "total": self.total_read,
             "kept": self.records.len(),
             "shown": messages.len(),
+            "ackedCount": shown.iter().filter(|m| self.is_acked(m)).count(),
             "messages": messages,
         })
         .to_string()
@@ -212,5 +242,28 @@ mod tests {
         let mut b = buffer();
         b.append("local", "outro", vec![]);
         assert!(b.records.is_empty());
+    }
+
+    #[test]
+    fn ack_is_local_persisted_and_can_be_hidden() {
+        let _host = crate::mock_host();
+        let mut b = buffer();
+        assert!(!b.is_acked(&b.records[0]));
+        assert!(b.toggle_ack(0, 10));
+        assert!(b.is_acked(&b.records[0]));
+        assert!(config::load_acked().iter().any(|k| k.contains("pedidos")));
+
+        let p = ConsumePrefs {
+            hide_acked: true,
+            ..ConsumePrefs::default()
+        };
+        assert_eq!(b.filtered(&p).len(), 1);
+
+        let json = b.to_json(&ConsumePrefs::default(), "ok");
+        assert!(json.contains("\"acked\":true"));
+        assert!(json.contains("\"ackedCount\":1"));
+
+        assert!(!b.toggle_ack(0, 10));
+        assert_eq!(b.filtered(&p).len(), 2);
     }
 }

@@ -187,6 +187,17 @@ impl Kafka {
         self.status = message.into();
     }
 
+    /// Ações da página HTML não passam por `run()`, então registramos aqui o
+    /// comando legível (`consume pedidos`, `publish pedidos`) e o desfecho.
+    fn log_action(command: impl Into<String>, status: &str, response: &str) {
+        config::append_log(config::CommandLogEntry {
+            command: command.into(),
+            status: status.into(),
+            response: response.into(),
+        });
+        host::refresh_view(LOG);
+    }
+
     /// Persistent feedback in the status bar. Notifications can be hidden by
     /// the IDE; the chip stays until the next command.
     fn report_result(&mut self, id: &str, result: &Result<Option<String>, Error>) {
@@ -202,6 +213,7 @@ impl Kafka {
                 status,
                 response: tooltip.clone(),
             });
+            host::refresh_view(LOG);
         }
         host::set_status_item(
             STATUS_ID,
@@ -720,23 +732,29 @@ impl Kafka {
                     .to_owned();
                 self.prefs.patch(payload);
                 if topic.is_empty() {
-                    self.messages.last_error = Some(i18n::t("Choose a topic."));
+                    let error = i18n::t("Choose a topic.");
+                    self.messages.last_error = Some(error.clone());
+                    Self::log_action("consume", "ERROR", &error);
                 } else {
                     let opts = self.consume_options(&topic, self.prefs.limit);
                     match self.consume(&c, &opts) {
                         Ok(count) => {
-                            self.messages.last_error = None;
-                            self.note(i18n::tf(
+                            let text = i18n::tf(
                                 "{count} messages read from {topic}",
                                 &[("count", &count.to_string()), ("topic", &topic)],
-                            ));
+                            );
+                            self.messages.last_error = None;
+                            self.note(text.clone());
+                            Self::log_action(&format!("consume {topic}"), "OK", &text);
                         }
                         Err(e) => {
-                            self.messages.last_error = Some(e.to_string());
-                            self.note(i18n::tf(
+                            let text = i18n::tf(
                                 "Failed to consume: {error}",
                                 &[("error", &e.to_string())],
-                            ));
+                            );
+                            self.messages.last_error = Some(e.to_string());
+                            self.note(text.clone());
+                            Self::log_action(&format!("consume {topic}"), "ERROR", &text);
                         }
                     }
                     self.prefs.save();
@@ -746,7 +764,9 @@ impl Kafka {
                 let c = self.active()?;
                 let topic = self.prefs.topic.clone();
                 if topic.is_empty() {
-                    self.messages.last_error = Some(i18n::t("Choose a topic."));
+                    let error = i18n::t("Choose a topic.");
+                    self.messages.last_error = Some(error.clone());
+                    Self::log_action("consume-live", "ERROR", &error);
                 } else {
                     let mut opts = self.consume_options(&topic, config::max_messages());
                     opts.live = true;
@@ -756,6 +776,11 @@ impl Kafka {
                         &i18n::tf("Kafka: {topic} (live)", &[("topic", &topic)]),
                         &log,
                     )?;
+                    Self::log_action(
+                        &format!("consume-live {topic}"),
+                        "OK",
+                        &i18n::t("Live log opened."),
+                    );
                 }
             }
             "clear" => {
@@ -782,19 +807,36 @@ impl Kafka {
                 };
                 match backend::publish(&c, &msg) {
                     Ok(()) => {
+                        let text =
+                            i18n::tf("Message published to {topic}", &[("topic", &msg.topic)]);
                         self.messages.last_error = None;
-                        self.note(i18n::tf(
-                            "Message published to {topic}",
-                            &[("topic", &msg.topic)],
-                        ));
+                        self.note(text.clone());
+                        Self::log_action(&format!("publish {}", msg.topic), "OK", &text);
                     }
                     Err(e) => {
+                        let text =
+                            i18n::tf("Failed to publish: {error}", &[("error", &e.to_string())]);
                         self.messages.last_error = Some(e.to_string());
-                        self.note(i18n::tf(
-                            "Failed to publish: {error}",
-                            &[("error", &e.to_string())],
-                        ));
+                        self.note(text.clone());
+                        Self::log_action(&format!("publish {}", msg.topic), "ERROR", &text);
                     }
+                }
+            }
+            "ack" => {
+                let partition = payload["partition"].as_i64().unwrap_or(0) as i32;
+                let offset = payload["offset"].as_i64().unwrap_or(-1);
+                if offset >= 0 {
+                    let acked = self.messages.toggle_ack(partition, offset);
+                    let verb = if acked { "acked" } else { "unacked" };
+                    self.note(i18n::tf(
+                        "Message #{offset} {verb}",
+                        &[("offset", &offset.to_string()), ("verb", verb)],
+                    ));
+                    Self::log_action(
+                        &format!("ack {}:{partition}:{offset}", self.messages.topic),
+                        "OK",
+                        verb,
+                    );
                 }
             }
             _ => {}
@@ -810,6 +852,7 @@ impl Plugin for Kafka {
     fn activate(&mut self, _ctx: &openidea_plugin::Context) -> Result<(), Error> {
         let _ = host::subscribe(EventKind::Scheduled);
         self.prefs = ConsumePrefs::load();
+        self.messages.acked = config::load_acked();
         self.versions = backend::BUILTIN_VERSIONS
             .iter()
             .map(|v| (*v).into())
@@ -1579,9 +1622,42 @@ impl Kafka {
             .status(&hint)
     }
 
-    /// Histórico `comando > status (resposta do terminal)`.
+    /// Histórico `comando > status (resposta do terminal)` em tabela: cada
+    /// entrada é uma linha, alinhada à esquerda, sem as quebras do `Body::Message`.
     fn render_log(&self) -> View {
-        View::message(&config::log_text())
+        let entries = config::load_log();
+        let rows: Vec<Vec<String>> = if entries.is_empty() {
+            vec![vec![
+                i18n::t("No commands yet."),
+                String::new(),
+                String::new(),
+            ]]
+        } else {
+            entries
+                .iter()
+                .map(|e| {
+                    let response = e
+                        .response
+                        .lines()
+                        .map(str::trim)
+                        .filter(|line| !line.is_empty())
+                        .collect::<Vec<_>>()
+                        .join(" | ");
+                    vec![e.command.clone(), e.status.clone(), response]
+                })
+                .collect()
+        };
+        let table = Table {
+            columns: ["Command", "Status", "Response"]
+                .iter()
+                .map(|s| (*s).into())
+                .collect(),
+            total_rows: rows.len() as u32,
+            first_row: 0,
+            rows,
+            editable: false,
+        };
+        View::new(Body::Table(table))
             .button(Button::new("log", "Refresh Log").icon("refresh"))
             .button(Button::new("clear-log", "Clear Log").icon("trash"))
             .status(&i18n::t(
@@ -2373,12 +2449,57 @@ mod tests {
             .unwrap();
         assert_eq!(plugin.prefs.topic, "pedidos");
         plugin.handle_messages(ViewEvent::Message(
+            json!({"action": "consume", "topic": "pedidos", "start": "beginning", "limit": 5}).to_string(),
+        ), &host.invocation()).unwrap();
+        plugin.handle_messages(ViewEvent::Message(
             json!({"action": "publish", "topic": "pedidos", "key": "k", "value": "v", "headers": "trace=abc"}).to_string(),
         ), &host.invocation()).unwrap();
         assert!(
             host.process_runs()
                 .iter()
                 .any(|r| r.program == backend::PRODUCER)
+        );
+        let log = config::log_text();
+        assert!(log.contains("consume pedidos"), "{log}");
+        assert!(log.contains("publish pedidos"), "{log}");
+        assert!(log.contains("> OK"), "{log}");
+    }
+
+    #[test]
+    fn html_page_can_ack_a_message_without_committing_an_offset() {
+        let host = host_with_cluster();
+        active_connection(&host);
+        let record = format!(
+            "CreateTime:1000{0}Partition:0{0}Offset:7{0}NO_HEADERS{0}k{0}v{1}",
+            model::FIELD_SEP,
+            model::RECORD_SEP
+        );
+        host.on_process(backend::CONSUMER, move |_, _| ok(&record));
+        let mut plugin = Kafka::default();
+        plugin.activate(&host.context("brunornasc.kafka")).unwrap();
+        plugin
+            .command("consume", &host.invocation(), Some("pedidos"))
+            .unwrap();
+
+        plugin
+            .handle_messages(
+                ViewEvent::Message(
+                    json!({"action": "ack", "partition": 0, "offset": 7}).to_string(),
+                ),
+                &host.invocation(),
+            )
+            .unwrap();
+
+        let state: Value = serde_json::from_str(&plugin.messages_state()).unwrap();
+        assert_eq!(state["messages"][0]["acked"], json!(true));
+        assert_eq!(state["ackedCount"], json!(1));
+        assert!(config::load_acked().iter().any(|k| k.contains("pedidos")));
+        assert!(
+            !host
+                .process_runs()
+                .iter()
+                .any(|r| r.args.iter().any(|a| a.contains("commit"))),
+            "ack must stay local"
         );
     }
 
@@ -2533,14 +2654,15 @@ mod tests {
             response: "not authorized".into(),
         });
         let view = plugin.render_log();
-        let Body::Message(text) = view.body else {
-            panic!("expected message")
-        };
-        assert!(
-            text.contains("publish\n> ERROR\n  not authorized"),
-            "{text}"
-        );
         assert!(view.toolbar.iter().any(|b| b.id == "clear-log"));
+        let Body::Table(table) = view.body else {
+            panic!("expected table")
+        };
+        assert_eq!(table.columns, ["Command", "Status", "Response"]);
+        assert_eq!(table.rows.len(), 1);
+        assert_eq!(table.rows[0][0], "publish");
+        assert_eq!(table.rows[0][1], "ERROR");
+        assert_eq!(table.rows[0][2], "not authorized");
         plugin
             .command("clear-log", &host.invocation(), None)
             .unwrap();

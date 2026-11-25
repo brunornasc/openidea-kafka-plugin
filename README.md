@@ -136,11 +136,14 @@ and point the optional script capabilities at its `bin/` scripts.
   configured with control-character separators, so keys/values containing
   tabs, commas or newlines stay intact. Every record carries **key, value,
   timestamp (and type), headers, partition and offset**. Modes: beginning
-  (`--from-beginning` / `--offset earliest`), end (`latest`), a specific offset
-  (with `--partition`) and live (a native IDE log tab, no polling).
+  (`--from-beginning` / `--offset earliest`, the default), end (`latest`, only
+  messages published after the click), a specific offset (with `--partition`)
+  and live (a native IDE log tab, no polling).
 - **Filter/search**: by value, key, header, offset range and timestamp range,
   optionally case-sensitive, in the **Messages** viewer (a sandboxed HTML page
-  talking to the plugin via `openidea.postMessage`/`onMessage`).
+  talking to the plugin via `openidea.postMessage`/`onMessage`). Each row has a
+  local **ack** button (`✓`/`○`): it marks the message as read (persisted,
+  optional **Hide acked** filter) without committing an offset to the broker.
 - **Publish**: `kafka-console-producer.sh --sync` with key, value, headers
   (`parse.headers`) and an optional target partition (via `kcat -P -p`, since
   the console producer cannot pin a partition).
@@ -176,10 +179,14 @@ and point the optional script capabilities at its `bin/` scripts.
   `on-schedule:60` plus the `autoRefresh` setting reload metadata
   automatically.
 - **Kafka Log** (also a **Log** tab in the explorer's detail pane) keeps the
-  last 80 entries as `command > status (response)`, most recent first. Every
-  Kafka/java process and every plugin command is recorded with its exit status
-  and redacted terminal output, so the last action's success or failure is
-  visible after the status chip changes. **Clear Log** empties the history.
+  last 80 entries as `command > status (response)`, most recent first. It is a
+  left-aligned table (one command per row, no collapsed whitespace), and
+  actions started from the Messages page log readable entries such as
+  `consume pedidos` / `publish pedidos` in addition to the underlying java
+  process. Every Kafka/java process and every plugin command is recorded with
+  its exit status and redacted terminal output, so the last action's success or
+  failure is visible after the status chip changes. **Clear Log** empties the
+  history.
 - Connection/auth/ACL/timeout errors are classified into clear messages. A
   failed Kafka connection is not silently reported as an empty topic list:
   `test_connection` checks the process exit status and stderr, and errors are
@@ -280,13 +287,16 @@ switching topics restores what was used for each one.
   `--formatter-property`: the `Serializer` suffix becomes `Deserializer` and
   the class comes from `org.apache.kafka.common.serialization`, except
   `JsonSerializer` (`org.apache.kafka.connect.json`) and the two Confluent
-  formats. Short aliases and fully qualified class names are accepted and
-  normalized to one of the names above.
+  formats. Binary formats (`ByteArray`, `Bytes`, `ByteBuffer`, `Void`) skip the
+  formatter deserializer: `ByteArrayDeserializer` would make the formatter print
+  `[B@1a2b…`, while raw bytes display the UTF-8 text that was published.
+  Short aliases and fully qualified class names are accepted and normalized to
+  one of the names above.
 - On publish, the same serializer class is passed via `--command-property`
   (Kafka 4.x) or `--producer-property` (Kafka 3.x), after the global settings
-  so the per-topic choice wins. The text typed in the form is the wire
-  representation for String, numeric and Json formats; it is sent unchanged
-  for every format.
+  so the per-topic choice wins. Both Kafka generations then force
+  `ByteArraySerializer` inside `ConsoleProducer`, so the UTF-8 text typed in the
+  form is the wire representation for every text-based format, unchanged.
 - A topic only stores bytes. These formats are a client convention: a consumer
   outside the plugin must use the matching deserializer to read the same
   payload.

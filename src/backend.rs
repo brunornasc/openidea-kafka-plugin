@@ -804,8 +804,19 @@ fn formatter_args(flag: &str, properties: &[String]) -> Vec<String> {
 /// Vão em `--formatter-property` (não em `--command-property`): o formatter
 /// só lê as suas próprias propriedades. Configurações globais servem como
 /// fallback quando o formato escolhido é o padrão `String`.
-fn formatter_deserializers(format: &str) -> [String; 2] {
+///
+/// Para formatos binários não passamos deserializador: o `DefaultMessageFormatter`
+/// chama `toString()` no resultado, e `ByteArrayDeserializer` devolve
+/// `[B@1a2b3c` em vez do texto. Sem deserializador ele escreve os bytes crus,
+/// que são exatamente o UTF-8 publicado pelo console producer.
+fn formatter_deserializers(format: &str) -> Vec<String> {
     let format = formats::normalize(format);
+    if matches!(
+        format.as_str(),
+        "ByteArraySerializer" | "BytesSerializer" | "ByteBufferSerializer" | "VoidSerializer"
+    ) {
+        return Vec::new();
+    }
     let default = formats::deserializer_class(&format);
     let custom = format == formats::STRING;
     let key = if custom && !config::key_deserializer().is_empty() {
@@ -818,16 +829,17 @@ fn formatter_deserializers(format: &str) -> [String; 2] {
     } else {
         default.into()
     };
-    [
+    vec![
         format!("key.deserializer={key}"),
         format!("value.deserializer={value}"),
     ]
 }
 
-/// Serializer classes chosen in the Messages view. Kafka 4.x overrides them
-/// with ByteArraySerializer, but on 3.x they are honored and the values are
-/// the standard wire representation of the form text. They are appended after
-/// the global settings so this per-topic choice wins.
+/// Serializer classes chosen in the Messages view. Both Kafka 3.x and 4.x
+/// force `ByteArraySerializer` in `ConsoleProducer` after reading the user
+/// properties, so the UTF-8 text from stdin is always the wire representation.
+/// We still send the chosen class per topic to document the intent and keep
+/// compatibility with custom readers.
 fn serializer_props(modern: bool, format: &str) -> Vec<String> {
     let flag = if modern {
         "--command-property"
@@ -1836,6 +1848,37 @@ mod tests {
             ..ConsumeOptions::default()
         };
         assert!(consume(&connection(), &opts).unwrap().is_empty());
+    }
+
+    #[test]
+    fn binary_formats_are_displayed_as_raw_text_not_java_identity() {
+        let host = crate::mock_host();
+        host.on_process(CONSUMER, |args, _| {
+            let joined = args.join("|");
+            assert!(
+                !joined.contains("ByteArrayDeserializer"),
+                "the formatter would print [B@… instead of the text"
+            );
+            assert!(joined.contains("print.value=true"));
+            ok("")
+        });
+        let opts = ConsumeOptions {
+            topic: "t".into(),
+            deserializer_format: "ByteArraySerializer".into(),
+            ..ConsumeOptions::default()
+        };
+        consume(&connection(), &opts).unwrap();
+
+        host.on_process(CONSUMER, |args, _| {
+            assert!(args.join("|").contains("StringDeserializer"));
+            ok("")
+        });
+        let opts = ConsumeOptions {
+            topic: "t".into(),
+            deserializer_format: "StringSerializer".into(),
+            ..ConsumeOptions::default()
+        };
+        consume(&connection(), &opts).unwrap();
     }
 
     #[test]

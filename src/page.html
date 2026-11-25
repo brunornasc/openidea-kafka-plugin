@@ -64,11 +64,13 @@
     padding: 5px 7px;
     cursor: pointer;
     display: grid;
-    grid-template-columns: auto auto auto 1fr;
+    grid-template-columns: auto auto auto auto 1fr;
     gap: 8px;
     align-items: baseline;
   }
   .msg:hover { background: var(--openidea-bg-hover); }
+  .msg.acked .value { opacity: .55; text-decoration: line-through; }
+  button.ack { padding: 1px 6px; min-width: 24px; color: var(--openidea-accent); }
   .meta { color: var(--openidea-fg-muted); font-variant-numeric: tabular-nums; }
   .value { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--openidea-font-mono, monospace); }
   .detail { grid-column: 1 / -1; display: none; white-space: pre-wrap; word-break: break-all; font-family: var(--openidea-font-mono, monospace); margin-top: 4px; border-top: 1px solid var(--openidea-border); padding-top: 4px; }
@@ -106,12 +108,14 @@
       <label><span data-i18n>Limit</span> <input id="limit" type="number" min="1" max="5000" style="width:70px"></label>
       <button id="consume" class="primary" data-i18n>Consume</button>
       <button id="live" data-i18n>Live</button>
+      <span class="hint" data-i18n>End starts at the log end: messages published before clicking Consume are not shown. Use Beginning to read existing messages.</span>
     </div>
     <div class="row">
       <input id="filterText" type="text" class="grow" data-i18n-ph="Search in value" placeholder="Search in value">
       <input id="filterKey" type="text" class="grow" data-i18n-ph="Search in key" placeholder="Search in key">
       <input id="filterHeader" type="text" class="grow" data-i18n-ph="Search in headers" placeholder="Search in headers">
       <label><input id="caseSensitive" type="checkbox"> Aa</label>
+      <label><input id="hideAcked" type="checkbox"> <span data-i18n>Hide acked</span></label>
     </div>
     <div class="row">
       <input id="offsetFrom" type="text" size="7" data-i18n-ph="offset ≥" placeholder="offset ≥">
@@ -185,6 +189,7 @@
     timeFrom: $('timeFrom').value,
     timeTo: $('timeTo').value,
     caseSensitive: $('caseSensitive').checked,
+    hideAcked: $('hideAcked').checked,
     deserializer: $('format').value,
     serializer: $('pubFormat').value,
   });
@@ -235,7 +240,7 @@
     fillFormats($('format'), chosen.deserializer || 'StringSerializer', true);
     fillFormats($('pubFormat'), chosen.serializer || 'StringSerializer', false);
     $('partition').value = p.partition || '';
-    $('start').value = p.start || 'end';
+    $('start').value = p.start || 'beginning';
     $('offset').value = p.offset || '';
     $('limit').value = p.limit || 200;
     $('filterText').value = p.filterText || '';
@@ -246,12 +251,14 @@
     $('timeFrom').value = p.timeFrom || '';
     $('timeTo').value = p.timeTo || '';
     $('caseSensitive').checked = !!p.caseSensitive;
+    $('hideAcked').checked = !!p.hideAcked;
     const active = (state.connections || []).find((c) => c.id === state.active);
     $('conn').textContent = active ? (active.name + ' · ' + active.bootstrap) : T('no active connection');
     $('status').textContent = state.status || '';
     $('error').textContent = state.error || '';
-    $('count').textContent = TF('{shown} of {kept} shown · {total} read', {
+    $('count').textContent = TF('{shown} of {kept} shown · {total} read · {acked} acked', {
       shown: state.shown || 0, kept: state.kept || 0, total: state.total || 0,
+      acked: state.ackedCount || 0,
     });
     const list = $('list');
     list.innerHTML = '';
@@ -270,6 +277,16 @@
         '\n' + esc(TF('headers: {headers}', { headers: headers || '-' })) +
         '\n' + esc(TF('key: {key}', { key: m.key == null ? '∅' : m.key })) +
         '\n' + esc(T('value:')) + '\n' + esc(m.value == null ? '∅' : m.value) + '</div>';
+      const ack = document.createElement('button');
+      ack.className = 'ack';
+      ack.textContent = m.acked ? '✓' : '○';
+      ack.title = T(m.acked ? 'Mark as unread' : 'Mark as read');
+      ack.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        post({ action: 'ack', partition: m.partition, offset: m.offset });
+      });
+      div.insertBefore(ack, div.firstChild);
+      if (m.acked) div.classList.add('acked');
       div.addEventListener('click', () => div.classList.toggle('open'));
       list.appendChild(div);
     }
@@ -301,7 +318,7 @@
   for (const id of ['format', 'pubFormat']) {
     $(id).addEventListener('change', () => sendPrefs('prefs'));
   }
-  for (const id of ['filterText', 'filterKey', 'filterHeader', 'offsetFrom', 'offsetTo', 'timeFrom', 'timeTo']) {
+  for (const id of ['filterText', 'filterKey', 'filterHeader', 'offsetFrom', 'offsetTo', 'timeFrom', 'timeTo', 'caseSensitive', 'hideAcked']) {
     $(id).addEventListener('change', () => sendPrefs('prefs'));
   }
 

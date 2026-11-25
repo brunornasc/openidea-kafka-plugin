@@ -351,5 +351,14 @@
   "Most recent first. Credentials and secrets are redacted.": "Mais recente primeiro. Credenciais e segredos são ocultados.",
   "No commands yet.": "Nenhum comando ainda.",
   "Could not download {url}: curl exit {code}: {detail}. Check kafkaVersion and downloadUrl.": "Não foi possível baixar {url}: curl saiu com {code}: {detail}. Verifique kafkaVersion e downloadUrl.",
-  "Could not download the Kafka tarball.": "Não foi possível baixar o tarball do Kafka."
+  "Could not download the Kafka tarball.": "Não foi possível baixar o tarball do Kafka.",
+  "End starts at the log end: messages published before clicking Consume are not shown. Use Beginning to read existing messages.": "End começa no fim do log: mensagens publicadas antes de clicar em Consumir não aparecem. Use Beginning para ler mensagens já existentes.",
+  "Hide acked": "Ocultar lidas",
+  "Mark as read": "Marcar como lida",
+  "Mark as unread": "Marcar como não lida",
+  "{shown} of {kept} shown · {total} read · {acked} acked": "{shown} de {kept} exibidas · {total} lidas · {acked} confirmadas",
+  "Live log opened.": "Log ao vivo aberto.",
+  "Message #{offset} {verb}": "Mensagem #{offset} {verb}",
+  "acked": "marcada como lida",
+  "unacked": "desmarcada"
 }

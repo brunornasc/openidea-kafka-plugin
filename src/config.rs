@@ -12,15 +12,19 @@ use crate::i18n;
 use openidea_plugin::{Error, host};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 
 pub const PROFILES_KEY: &str = "kafka:profiles";
 pub const ACTIVE_KEY: &str = "kafka:active";
 pub const INSTALL_KEY: &str = "kafka:install";
 pub const PENDING_INSTALL_KEY: &str = "kafka:pending-install";
 pub const PREFS_KEY: &str = "kafka:prefs";
+/// Migração única: o padrão antigo era `end`, que escondia mensagens já
+/// publicadas. Depois desta chave, a escolha explícita da pessoa é respeitada.
+pub const PREFS_START_MIGRATED_KEY: &str = "kafka:prefs-start-beginning";
 pub const FORMATS_KEY: &str = "kafka:formats";
 pub const LOG_KEY: &str = "kafka:command-log";
+pub const ACKED_KEY: &str = "kafka:acked-messages";
 
 pub const SECURITY_PROTOCOLS: [&str; 4] = ["PLAINTEXT", "SSL", "SASL_PLAINTEXT", "SASL_SSL"];
 pub const SASL_MECHANISMS: [&str; 4] = ["", "PLAIN", "SCRAM-SHA-256", "SCRAM-SHA-512"];
@@ -556,6 +560,31 @@ pub fn log_text() -> String {
         .join("\n\n")
 }
 
+/// Chave estável de uma mensagem: a mesma mensagem vista em outra conexão ou
+/// tópico não recebe o ack alheio.
+pub fn ack_key(connection: &str, topic: &str, partition: i32, offset: i64) -> String {
+    format!("{connection}\u{1f}{topic}\u{1f}{partition}\u{1f}{offset}")
+}
+
+pub fn load_acked() -> HashSet<String> {
+    let Ok(Some(raw)) = host::storage::get(ACKED_KEY) else {
+        return HashSet::new();
+    };
+    serde_json::from_str::<Vec<String>>(&raw)
+        .map(|v| v.into_iter().collect())
+        .unwrap_or_default()
+}
+
+pub fn save_acked(acked: &HashSet<String>) {
+    let mut keys: Vec<String> = acked.iter().cloned().collect();
+    keys.sort();
+    keys.truncate(5000);
+    let _ = host::storage::set(
+        ACKED_KEY,
+        &serde_json::to_string(&keys).unwrap_or_else(|_| "[]".into()),
+    );
+}
+
 /// Preferências do visualizador de mensagens.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
@@ -575,6 +604,8 @@ pub struct ConsumePrefs {
     pub time_from: String,
     pub time_to: String,
     pub case_sensitive: bool,
+    /// Esconde mensagens já marcadas como lidas na lista.
+    pub hide_acked: bool,
 }
 
 impl Default for ConsumePrefs {
@@ -582,7 +613,7 @@ impl Default for ConsumePrefs {
         Self {
             topic: String::new(),
             partition: String::new(),
-            start: "end".into(),
+            start: "beginning".into(),
             offset: String::new(),
             limit: 200,
             filter_text: String::new(),
@@ -593,16 +624,28 @@ impl Default for ConsumePrefs {
             time_from: String::new(),
             time_to: String::new(),
             case_sensitive: false,
+            hide_acked: false,
         }
     }
 }
 
 impl ConsumePrefs {
     pub fn load() -> Self {
+        let migrated = host::storage::get(PREFS_START_MIGRATED_KEY)
+            .ok()
+            .flatten()
+            .is_some();
         let Ok(Some(raw)) = host::storage::get(PREFS_KEY) else {
             return Self::default();
         };
-        serde_json::from_str(&raw).unwrap_or_default()
+        let mut prefs: Self = serde_json::from_str(&raw).unwrap_or_default();
+        if !migrated {
+            if prefs.start == "end" {
+                prefs.start = "beginning".into();
+            }
+            let _ = host::storage::set(PREFS_START_MIGRATED_KEY, "1");
+        }
+        prefs
     }
 
     pub fn save(&self) {
@@ -626,6 +669,7 @@ impl ConsumePrefs {
             "timeFrom": self.time_from,
             "timeTo": self.time_to,
             "caseSensitive": self.case_sensitive,
+            "hideAcked": self.hide_acked,
         })
         .to_string()
     }
@@ -670,6 +714,9 @@ impl ConsumePrefs {
         }
         if let Some(v) = value.get("caseSensitive").and_then(|v| v.as_bool()) {
             self.case_sensitive = v;
+        }
+        if let Some(v) = value.get("hideAcked").and_then(|v| v.as_bool()) {
+            self.hide_acked = v;
         }
     }
 }
@@ -832,6 +879,24 @@ pub fn cli_flavour() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_messages_view_starts_at_the_beginning_by_default() {
+        let _host = crate::mock_host();
+        assert_eq!(ConsumePrefs::default().start, "beginning");
+    }
+
+    #[test]
+    fn saved_end_preference_is_migrated_once() {
+        let _host = crate::mock_host();
+        let _ = host::storage::delete(PREFS_START_MIGRATED_KEY);
+        host::storage::set(PREFS_KEY, "{\"start\":\"end\"}").unwrap();
+        assert_eq!(ConsumePrefs::load().start, "beginning");
+
+        // Depois da migração, `end` escolhido de propósito é preservado.
+        host::storage::set(PREFS_KEY, "{\"start\":\"end\"}").unwrap();
+        assert_eq!(ConsumePrefs::load().start, "end");
+    }
 
     #[test]
     fn download_sources_prefer_the_fast_cdn_and_fall_back() {
