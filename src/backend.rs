@@ -294,7 +294,7 @@ fn execute(
     if result.is_err() {
         // Sem segredos: o JAAS está em arquivo e `redact` esconde valores.
         host::log(
-            LogLevel::Debug,
+            LogLevel::Info,
             &format!(
                 "Kafka CLI failed: {} {}",
                 tool.program(),
@@ -331,7 +331,36 @@ fn build(
         args.push(arg);
     }
     args.extend(client_props(c, tool, modern)?);
-    Ok(args)
+
+    // Algumas versões do host repetem argumentos ao repassar o comando. Flags
+    // de valor único não podem aparecer duas vezes na CLI Kafka (joptsimple
+    // lança `MultipleArgumentsForOptionException`), então mantemos a primeira
+    // ocorrência e descartamos as seguintes. Flags repetíveis
+    // (`--formatter-property`, `--command-property`, `--config`, …) ficam.
+    const SINGLE: &[&str] = &[
+        "--bootstrap-server",
+        "--topic",
+        "--command-config",
+        "--consumer.config",
+        "--producer.config",
+        "--partition",
+        "--offset",
+        "--timeout-ms",
+        "--max-messages",
+    ];
+    let mut seen = std::collections::HashSet::new();
+    let mut out = Vec::with_capacity(args.len());
+    let mut i = 0;
+    while i < args.len() {
+        let arg = &args[i];
+        if SINGLE.contains(&arg.as_str()) && !seen.insert(arg.clone()) {
+            i += if i + 1 < args.len() { 2 } else { 1 };
+            continue;
+        }
+        out.push(arg.clone());
+        i += 1;
+    }
+    Ok(out)
 }
 
 /// Hash estável para o nome do arquivo gerado a partir do JAAS inline.
@@ -1260,6 +1289,22 @@ mod tests {
         assert_eq!(flags, 1, "{args:?}");
         assert!(!args.iter().any(|a| a == "/tmp/stale.properties"));
         assert!(!args.iter().any(|a| a.contains("password=")));
+    }
+
+    #[test]
+    fn build_collapses_duplicated_single_value_flags() {
+        let _host = crate::mock_host();
+        let c = connection();
+        let specific = strings(&["--bootstrap-server", "other:9092", "--list"]);
+        let args = build(&c, Tool::Topics, true, specific).unwrap();
+        assert_eq!(
+            args.iter()
+                .filter(|a| a.as_str() == "--bootstrap-server")
+                .count(),
+            1
+        );
+        assert!(args.iter().any(|a| a.as_str() == "localhost:9092"));
+        assert!(!args.iter().any(|a| a.as_str() == "other:9092"));
     }
 
     #[test]
