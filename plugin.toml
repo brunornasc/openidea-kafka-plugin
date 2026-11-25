@@ -1,0 +1,27 @@
+id = "brunornasc.kafka"
+name = "Kafka"
+version = "0.1.0"
+description = "Manage Kafka from OpenIDEA."
+authors = ["Bruno Rodrigues <brunornasc@gmail.com>"]
+license = "Apache-2.0"
+# Marketplace categories (up to 3): languages, themes, icon-themes, linters,
+# vcs, ai, frameworks, tools, other.
+categories = ["tools"]
+engines.openidea = "^1.0"
+# Built by `openidea-plugin build`. The code is loaded the first time one of
+# its commands runs; the commands below show in Find Action before that.
+wasm = "dist/plugin.wasm"
+
+# What the code may do. The user approves these when installing.
+[capabilities]
+required = ["editor.read"]
+
+[[contributes.commands]]
+id = "say-hello"
+title = "Kafka: Say Hello"
+category = "Kafka"
+
+[[contributes.commands]]
+id = "line-count"
+title = "Kafka: Line Count of Active File"
+category = "Kafka"
