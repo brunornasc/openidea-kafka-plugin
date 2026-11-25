@@ -54,9 +54,7 @@ impl MessageBuffer {
         self.records
             .iter()
             .filter(|m| {
-                if !text.is_empty()
-                    && !norm(m.value.as_deref().unwrap_or("")).contains(&text)
-                {
+                if !text.is_empty() && !norm(m.value.as_deref().unwrap_or("")).contains(&text) {
                     return false;
                 }
                 if !key.is_empty() && !norm(m.key.as_deref().unwrap_or("")).contains(&key) {
@@ -131,7 +129,6 @@ impl MessageBuffer {
 mod tests {
     use super::*;
     use crate::model::MessageRecord;
-    
 
     fn buffer() -> MessageBuffer {
         let mut b = MessageBuffer::default();
@@ -190,7 +187,10 @@ mod tests {
     fn case_insensitive_by_default_and_case_sensitive_when_asked() {
         let _host = crate::mock_host();
         let b = buffer();
-        let mut p = ConsumePrefs { filter_text: "outro".into(), ..ConsumePrefs::default() };
+        let mut p = ConsumePrefs {
+            filter_text: "outro".into(),
+            ..ConsumePrefs::default()
+        };
         assert_eq!(b.filtered(&p).len(), 1);
         p.case_sensitive = true;
         assert_eq!(b.filtered(&p).len(), 0);

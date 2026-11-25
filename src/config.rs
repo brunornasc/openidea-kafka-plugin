@@ -30,11 +30,16 @@ pub struct Connection {
     pub bootstrap_servers: String,
     pub security_protocol: String,
     pub sasl_mechanism: String,
-    /// Usuário não é segredo; a senha vive em `client_properties`.
+    /// Usuário informado no formulário (usado pelo `kcat`; a senha fica no JAAS).
     pub sasl_username: String,
     /// Caminho absoluto de um arquivo `.properties` Java (contém
     /// `sasl.jaas.config`, truststores etc.). O plugin nunca lê o conteúdo.
+    /// Opcional quando `sasl_jaas_config` é usado.
     pub client_properties: String,
+    /// JAAS completo, para desenvolvimento. O plugin escreve um arquivo
+    /// `.properties` no diretório privado e passa apenas o caminho à CLI.
+    /// Fica salvo em texto simples junto com o perfil — uso dev, não produção.
+    pub sasl_jaas_config: String,
     /// Caminho opcional de um arquivo de configuração `kcat` (`-F`).
     pub kcat_config: String,
     pub tls_ca: String,
@@ -88,9 +93,12 @@ impl Connection {
         if self.uses_sasl() && self.sasl_mechanism.is_empty() {
             return Err(i18n::t("Choose a SASL mechanism (PLAIN or SCRAM).").into());
         }
-        if self.uses_sasl() && self.client_properties.trim().is_empty() {
+        if self.uses_sasl()
+            && self.client_properties.trim().is_empty()
+            && self.sasl_jaas_config.trim().is_empty()
+        {
             return Err(i18n::t(
-                "SASL connections require a .properties file with sasl.jaas.config/credentials. Set the path in \"Client properties file\" — the plugin does not store passwords."
+                "SASL connections need a client properties file or an inline sasl.jaas.config.",
             )
             .into());
         }
@@ -104,7 +112,9 @@ impl Connection {
                 .into());
             }
             if value.is_empty() {
-                return Err(i18n::tf("The property {key} has no value.", &[("key", key.as_str())]).into());
+                return Err(
+                    i18n::tf("The property {key} has no value.", &[("key", key.as_str())]).into(),
+                );
             }
         }
         Ok(())
@@ -126,6 +136,7 @@ impl Connection {
             "sasl_mechanism" => self.sasl_mechanism = value.into(),
             "sasl_username" => self.sasl_username = value.into(),
             "client_properties" => self.client_properties = value.into(),
+            "sasl_jaas_config" => self.sasl_jaas_config = value.into(),
             "kcat_config" => self.kcat_config = value.into(),
             "tls_ca" => self.tls_ca = value.into(),
             "tls_cert" => self.tls_cert = value.into(),
@@ -149,10 +160,17 @@ impl Connection {
     pub fn java_properties(&self) -> Vec<(String, String)> {
         let mut out = Vec::new();
         if !self.tls_truststore.is_empty() {
-            out.push(("ssl.truststore.location".into(), self.tls_truststore.clone()));
+            out.push((
+                "ssl.truststore.location".into(),
+                self.tls_truststore.clone(),
+            ));
         }
         if !self.tls_keystore.is_empty() {
             out.push(("ssl.keystore.location".into(), self.tls_keystore.clone()));
+        }
+        if self.uses_sasl() {
+            out.push(("security.protocol".into(), self.security_protocol.clone()));
+            out.push(("sasl.mechanism".into(), self.sasl_mechanism.clone()));
         }
         out.extend(self.extra_pairs());
         out
@@ -192,6 +210,8 @@ impl Connection {
         }
         if !self.client_properties.is_empty() {
             parts.push(format!("config={}", self.client_properties));
+        } else if !self.sasl_jaas_config.trim().is_empty() {
+            parts.push(i18n::t("jaas=inline"));
         }
         parts.join(" · ")
     }
@@ -207,13 +227,21 @@ pub fn parse_bootstrap(servers: &str) -> Result<Vec<String>, Error> {
     for part in trimmed.split(',') {
         let part = part.trim();
         let Some((host, port)) = part.rsplit_once(':') else {
-            return Err(i18n::tf("Invalid bootstrap server {part}: use host:port.", &[("part", part)]).into());
+            return Err(i18n::tf(
+                "Invalid bootstrap server {part}: use host:port.",
+                &[("part", part)],
+            )
+            .into());
         };
         let port: u32 = port
             .parse()
             .map_err(|_| i18n::tf("Invalid port in {part}.", &[("part", part)]))?;
         if host.is_empty() || port == 0 || port > 65535 {
-            return Err(i18n::tf("Invalid bootstrap server {part}: use host:port.", &[("part", part)]).into());
+            return Err(i18n::tf(
+                "Invalid bootstrap server {part}: use host:port.",
+                &[("part", part)],
+            )
+            .into());
         }
         if host.chars().any(char::is_control) || host.contains(' ') {
             return Err(i18n::tf("Invalid host in {part}.", &[("part", part)]).into());
@@ -237,9 +265,19 @@ fn split_property(prop: &str) -> Result<(String, String), Error> {
 /// Nomes que poderiam carregar um segredo: nunca entram em storage/argv/logs.
 pub fn is_secret_key(key: &str) -> bool {
     let k = key.to_ascii_lowercase();
-    ["password", "passwd", "secret", "token", "jaas", "credential", "private.key", "api.key", "apikey"]
-        .iter()
-        .any(|s| k.contains(s))
+    [
+        "password",
+        "passwd",
+        "secret",
+        "token",
+        "jaas",
+        "credential",
+        "private.key",
+        "api.key",
+        "apikey",
+    ]
+    .iter()
+    .any(|s| k.contains(s))
 }
 
 /// Redige segredos que porventura apareçam na saída de um processo.
@@ -247,7 +285,10 @@ pub fn redact(text: &str) -> String {
     text.lines()
         .map(|line| {
             let lower = line.to_ascii_lowercase();
-            if is_secret_key(&lower) || lower.contains("authorization:") || lower.contains("sasl.jaas.config") {
+            if is_secret_key(&lower)
+                || lower.contains("authorization:")
+                || lower.contains("sasl.jaas.config")
+            {
                 // Mantém a chave, esconde o valor.
                 if let Some((key, _)) = line.split_once('=') {
                     format!("{key}=<redacted>")
@@ -309,7 +350,10 @@ pub fn by_id(id: &str) -> Option<Connection> {
 }
 
 pub fn active_id() -> Option<String> {
-    host::storage::get(ACTIVE_KEY).ok().flatten().filter(|s| !s.is_empty())
+    host::storage::get(ACTIVE_KEY)
+        .ok()
+        .flatten()
+        .filter(|s| !s.is_empty())
 }
 
 pub fn set_active(id: &str) {
@@ -329,7 +373,11 @@ pub fn new_id(name: &str) -> String {
         .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
         .collect();
     let slug = slug.trim_matches('-').to_owned();
-    let base = if slug.is_empty() { "cluster".into() } else { slug };
+    let base = if slug.is_empty() {
+        "cluster".into()
+    } else {
+        slug
+    };
     let profiles = load_profiles();
     if !profiles.iter().any(|p| p.id == base) {
         return base;
@@ -356,7 +404,10 @@ pub fn install_info() -> Option<InstallInfo> {
 }
 
 pub fn set_install_info(info: &InstallInfo) -> Result<(), Error> {
-    host::storage::set(INSTALL_KEY, &serde_json::to_string(info).map_err(|e| e.to_string())?)
+    host::storage::set(
+        INSTALL_KEY,
+        &serde_json::to_string(info).map_err(|e| e.to_string())?,
+    )
 }
 
 /// Preferências do visualizador de mensagens.
@@ -522,12 +573,14 @@ pub fn cli_flavour() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
 
     #[test]
     fn bootstrap_servers_are_validated() {
         let _host = crate::mock_host();
-        assert_eq!(parse_bootstrap("localhost:9092").unwrap(), vec!["localhost:9092"]);
+        assert_eq!(
+            parse_bootstrap("localhost:9092").unwrap(),
+            vec!["localhost:9092"]
+        );
         assert_eq!(
             parse_bootstrap(" a:9092 , b:19092 ").unwrap(),
             vec!["a:9092", "b:19092"]
@@ -538,7 +591,7 @@ mod tests {
     }
 
     #[test]
-    fn profiles_never_store_secrets_and_sasl_requires_a_properties_file() {
+    fn profiles_never_store_secrets_and_sasl_requires_credentials() {
         let _host = crate::mock_host();
         let mut c = Connection::new("local", "Local");
         c.bootstrap_servers = "localhost:9092".into();
@@ -546,14 +599,20 @@ mod tests {
 
         c.security_protocol = "SASL_SSL".into();
         c.sasl_mechanism = "SCRAM-SHA-256".into();
-        assert!(c.validate().is_err(), "SASL sem arquivo de credenciais");
+        assert!(c.validate().is_err(), "SASL sem credenciais");
         c.client_properties = "/home/user/kafka.properties".into();
         c.validate().unwrap();
+        c.client_properties.clear();
+        c.sasl_jaas_config =
+            "org.example.LoginModule required username=\"dev\" password=\"x\";".into();
+        c.validate().unwrap();
+        c.sasl_jaas_config.clear();
 
         c.extra_properties.push("sasl.password=segredo".into());
         assert!(c.validate().is_err(), "senha em propriedade extra");
         c.extra_properties.clear();
         c.extra_properties.push("request.timeout.ms=10000".into());
+        c.client_properties = "/home/user/kafka.properties".into();
         c.validate().unwrap();
 
         upsert(c.clone()).unwrap();
@@ -588,8 +647,16 @@ mod tests {
         c.validate().unwrap();
 
         let java = c.java_properties();
-        assert!(java.contains(&("ssl.truststore.location".into(), "/etc/kafka/truststore.jks".into())));
-        assert!(java.contains(&("ssl.keystore.location".into(), "/etc/kafka/keystore.jks".into())));
+        assert!(java.contains(&(
+            "ssl.truststore.location".into(),
+            "/etc/kafka/truststore.jks".into()
+        )));
+        assert!(java.contains(&(
+            "ssl.keystore.location".into(),
+            "/etc/kafka/keystore.jks".into()
+        )));
+        assert!(java.contains(&("security.protocol".into(), "SASL_SSL".into())));
+        assert!(java.contains(&("sasl.mechanism".into(), "SCRAM-SHA-256".into())));
         assert!(java.contains(&("request.timeout.ms".into(), "10000".into())));
 
         let kcat = c.kcat_properties();

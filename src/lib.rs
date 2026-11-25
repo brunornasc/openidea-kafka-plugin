@@ -18,13 +18,13 @@ use config::{Connection, ConsumePrefs};
 use messages::MessageBuffer;
 use model::{ClusterInfo, GroupLag, Partition, Topic};
 use openidea_plugin::details::{Details, Pane, Tab};
+use openidea_plugin::host;
 use openidea_plugin::views::{
     Body, Button, Field, FieldValue, Table, TableSort, TreeItem, View, ViewEvent, Viewport, Views,
 };
 use openidea_plugin::{
     Error, Event, EventKind, Invocation, NotificationLevel, PickItem, Plugin, register_plugin,
 };
-use openidea_plugin::host;
 use serde_json::{Value, json};
 use std::collections::BTreeSet;
 
@@ -35,7 +35,15 @@ const CONNECTIONS: &str = "connections";
 const BROKERS: &str = "brokers";
 const GROUPS: &str = "groups";
 const INSTALL: &str = "install";
-const ALL_VIEWS: [&str; 7] = [EXPLORER, TOPICS, MESSAGES, CONNECTIONS, BROKERS, GROUPS, INSTALL];
+const ALL_VIEWS: [&str; 7] = [
+    EXPLORER,
+    TOPICS,
+    MESSAGES,
+    CONNECTIONS,
+    BROKERS,
+    GROUPS,
+    INSTALL,
+];
 const PAGE: &str = include_str!("page.html");
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -125,7 +133,10 @@ impl Kafka {
         let mut topic = backend::describe_topics(c, Some(name))?
             .into_iter()
             .find(|t| t.name == name)
-            .unwrap_or_else(|| Topic { name: name.into(), ..Topic::default() });
+            .unwrap_or_else(|| Topic {
+                name: name.into(),
+                ..Topic::default()
+            });
         for note in backend::fill_offsets(c, &mut topic) {
             self.notes.push(note);
         }
@@ -138,10 +149,7 @@ impl Kafka {
         let count = records.len();
         self.messages.append(&c.id, &opts.topic, records);
         self.prefs.topic = opts.topic.clone();
-        self.prefs.partition = opts
-            .partition
-            .map(|p| p.to_string())
-            .unwrap_or_default();
+        self.prefs.partition = opts.partition.map(|p| p.to_string()).unwrap_or_default();
         self.prefs.start = opts.start.clone();
         self.prefs.offset = opts.offset.clone();
         self.prefs.limit = opts.limit;
@@ -202,10 +210,12 @@ impl Kafka {
             serde_json::from_str(&self.messages.to_json(&self.prefs, &self.status))
                 .unwrap_or_else(|_| json!({}));
         let profiles = config::load_profiles();
-        value["connections"] = json!(profiles
-            .iter()
-            .map(|p| json!({"id": p.id, "name": p.name, "bootstrap": p.bootstrap_servers}))
-            .collect::<Vec<_>>());
+        value["connections"] = json!(
+            profiles
+                .iter()
+                .map(|p| json!({"id": p.id, "name": p.name, "bootstrap": p.bootstrap_servers}))
+                .collect::<Vec<_>>()
+        );
         value["active"] = json!(config::active_id());
         value["topics"] = json!(self.topic_names);
         value["installed"] = json!(config::install_info().map(|i| i.bin));
@@ -267,7 +277,10 @@ impl Kafka {
                 let count = backend::test_connection(&profile)?;
                 let text = i18n::tf(
                     "Connection OK: {count} topics at {servers}.",
-                    &[("count", &count.to_string()), ("servers", &profile.bootstrap_servers)],
+                    &[
+                        ("count", &count.to_string()),
+                        ("servers", &profile.bootstrap_servers),
+                    ],
                 );
                 host::notify(NotificationLevel::Info, "Kafka", &text);
                 Ok(Some(text))
@@ -278,7 +291,10 @@ impl Kafka {
                     .ok_or_else(|| i18n::tf("Connection {id} not found.", &[("id", &id)]))?;
                 let body = i18n::tf(
                     "Delete the connection {name} ({servers})?",
-                    &[("name", &profile.name), ("servers", &profile.bootstrap_servers)],
+                    &[
+                        ("name", &profile.name),
+                        ("servers", &profile.bootstrap_servers),
+                    ],
                 );
                 if !host::confirm(&i18n::t("Kafka: delete connection"), &body)? {
                     return Err(Error::Cancelled);
@@ -287,7 +303,10 @@ impl Kafka {
                 self.draft = None;
                 let _ = self.reload();
                 Self::refresh_all();
-                Ok(Some(i18n::tf("Connection {name} deleted.", &[("name", &profile.name)])))
+                Ok(Some(i18n::tf(
+                    "Connection {name} deleted.",
+                    &[("name", &profile.name)],
+                )))
             }
             "connection-activate" => {
                 let id = self.choose_connection(arg)?;
@@ -297,12 +316,9 @@ impl Kafka {
                 Ok(Some(i18n::tf("Active connection: {id}", &[("id", &id)])))
             }
             "connection-save" => {
-                let mut profile = self
-                    .draft
-                    .clone()
-                    .ok_or_else(|| {
-                        i18n::t("No connection is being edited. Use 'Kafka: New Connection'.")
-                    })?;
+                let mut profile = self.draft.clone().ok_or_else(|| {
+                    i18n::t("No connection is being edited. Use 'Kafka: New Connection'.")
+                })?;
                 if profile.id.is_empty() {
                     profile.id = config::new_id(&profile.name);
                 }
@@ -341,7 +357,11 @@ impl Kafka {
                     .join("\n");
                 let text = i18n::tf(
                     "Apache Kafka {version} installed in {dir}.\n\nPoint the process:* capabilities to the scripts:\n{scripts}\n\nJava 17+ (Kafka 4.x) on the PATH is required.",
-                    &[("version", &version), ("dir", &info.dir), ("scripts", &scripts)],
+                    &[
+                        ("version", &version),
+                        ("dir", &info.dir),
+                        ("scripts", &scripts),
+                    ],
                 );
                 host::notify(
                     NotificationLevel::Info,
@@ -441,7 +461,7 @@ impl Kafka {
                 let opts = self.consume_options(&topic, config::max_messages());
                 let mut opts = opts;
                 opts.live = true;
-                let log = backend::live_log(&c, &opts);
+                let log = backend::live_log(&c, &opts)?;
                 let key = format!("kafka-live-{}", sanitize(&topic));
                 let title = i18n::tf("Kafka: {topic} (live)", &[("topic", &topic)]);
                 host::open_log_tab(&key, &title, &log)?;
@@ -455,15 +475,10 @@ impl Kafka {
                 let topic = self.choose_topic(arg)?;
                 let key = ask(&i18n::t("Key (empty = no key)"), Some(""))?;
                 let value = ask_multiline(&i18n::t("Message value"), Some(""))?;
-                let headers_raw = ask(
-                    &i18n::t("Headers (key=value, comma separated)"),
-                    Some(""),
-                )?;
+                let headers_raw = ask(&i18n::t("Headers (key=value, comma separated)"), Some(""))?;
                 let headers = parse_configs(&headers_raw)?;
-                let partition_raw = ask(
-                    &i18n::t("Target partition (empty = automatic)"),
-                    Some(""),
-                )?;
+                let partition_raw =
+                    ask(&i18n::t("Target partition (empty = automatic)"), Some(""))?;
                 let partition = if partition_raw.trim().is_empty() {
                     None
                 } else {
@@ -582,7 +597,10 @@ impl Kafka {
                         }
                         Err(e) => {
                             self.messages.last_error = Some(e.to_string());
-                            self.note(i18n::tf("Failed to consume: {error}", &[("error", &e.to_string())]));
+                            self.note(i18n::tf(
+                                "Failed to consume: {error}",
+                                &[("error", &e.to_string())],
+                            ));
                         }
                     }
                     self.prefs.save();
@@ -596,7 +614,7 @@ impl Kafka {
                 } else {
                     let mut opts = self.consume_options(&topic, config::max_messages());
                     opts.live = true;
-                    let log = backend::live_log(&c, &opts);
+                    let log = backend::live_log(&c, &opts)?;
                     host::open_log_tab(
                         &format!("kafka-live-{}", sanitize(&topic)),
                         &i18n::tf("Kafka: {topic} (live)", &[("topic", &topic)]),
@@ -635,7 +653,10 @@ impl Kafka {
                     }
                     Err(e) => {
                         self.messages.last_error = Some(e.to_string());
-                        self.note(i18n::tf("Failed to publish: {error}", &[("error", &e.to_string())]));
+                        self.note(i18n::tf(
+                            "Failed to publish: {error}",
+                            &[("error", &e.to_string())],
+                        ));
                     }
                 }
             }
@@ -734,10 +755,13 @@ impl Kafka {
             let is_active = active.as_deref() == Some(p.id.as_str());
             let expanded = self.expanded.contains(&key) || is_active;
             items.push(
-                TreeItem::new(&key, &format!("{} {}", if is_active { "●" } else { "○" }, p.name))
-                    .icon("server")
-                    .detail(&p.bootstrap_servers)
-                    .expandable(expanded),
+                TreeItem::new(
+                    &key,
+                    &format!("{} {}", if is_active { "●" } else { "○" }, p.name),
+                )
+                .icon("server")
+                .detail(&p.bootstrap_servers)
+                .expandable(expanded),
             );
             if !expanded {
                 continue;
@@ -746,8 +770,18 @@ impl Kafka {
             let brokers_key = format!("cat:{}:brokers", p.id);
             let groups_key = format!("cat:{}:groups", p.id);
             let categories: [(&String, &str, &str, usize); 3] = [
-                (&topics_key, "Topics ({count})", "folder", self.topic_names.len()),
-                (&brokers_key, "Brokers ({count})", "server", self.cluster.brokers.len()),
+                (
+                    &topics_key,
+                    "Topics ({count})",
+                    "folder",
+                    self.topic_names.len(),
+                ),
+                (
+                    &brokers_key,
+                    "Brokers ({count})",
+                    "server",
+                    self.cluster.brokers.len(),
+                ),
                 (
                     &groups_key,
                     "Consumer groups ({count})",
@@ -822,7 +856,11 @@ impl Kafka {
                         .icon("server")
                         .detail(&i18n::tf(
                             "{host}:{port} · {status}",
-                            &[("host", &b.host), ("port", &b.port.to_string()), ("status", &b.status)],
+                            &[
+                                ("host", &b.host),
+                                ("port", &b.port.to_string()),
+                                ("status", &b.status),
+                            ],
                         )),
                     );
                 }
@@ -867,9 +905,7 @@ impl Kafka {
                 {
                     let _ = self.inspect_topic(&c, &name);
                 }
-                if activating
-                    && let Selection::Topic(name) = self.selected.clone()
-                {
+                if activating && let Selection::Topic(name) = self.selected.clone() {
                     self.prefs.topic = name;
                     self.prefs.save();
                     let _ = host::reveal_view(MESSAGES);
@@ -894,7 +930,11 @@ impl Kafka {
                     format_configs(&t.configs),
                     t.details
                         .iter()
-                        .map(|p| p.leader.map(|l| l.to_string()).unwrap_or_else(|| "-".into()))
+                        .map(|p| {
+                            p.leader
+                                .map(|l| l.to_string())
+                                .unwrap_or_else(|| "-".into())
+                        })
                         .collect::<Vec<_>>()
                         .join(", "),
                 ]
@@ -938,10 +978,16 @@ impl Kafka {
                     Selection::Topic(n) => Some(n.clone()),
                     _ => None,
                 };
-                let arg = ["topic-delete", "topic-details", "consume", "publish", "partitions"]
-                    .contains(&id.as_str())
-                    .then_some(name)
-                    .flatten();
+                let arg = [
+                    "topic-delete",
+                    "topic-details",
+                    "consume",
+                    "publish",
+                    "partitions",
+                ]
+                .contains(&id.as_str())
+                .then_some(name)
+                .flatten();
                 let result = self.command(&id, ctx, arg.as_deref());
                 if let Err(e) = result {
                     host::notify(NotificationLevel::Error, "Kafka", &e.to_string());
@@ -1027,7 +1073,11 @@ impl Kafka {
                     ],
                 )),
             ),
-            Field::new("name", "Connection name", FieldValue::Text(draft.name.clone())),
+            Field::new(
+                "name",
+                "Connection name",
+                FieldValue::Text(draft.name.clone()),
+            ),
             Field::new(
                 "bootstrap_servers",
                 "Bootstrap servers (host:port, …)",
@@ -1054,13 +1104,30 @@ impl Kafka {
                 FieldValue::Text(draft.client_properties.clone()),
             ),
             Field::new(
+                "sasl_jaas_config",
+                "SASL JAAS config (inline, dev only)",
+                FieldValue::Multiline(draft.sasl_jaas_config.clone()),
+            ),
+            Field::new(
                 "kcat_config",
                 "kcat config file (optional)",
                 FieldValue::Text(draft.kcat_config.clone()),
             ),
-            Field::new("tls_ca", "TLS: CA / truststore", FieldValue::Text(draft.tls_ca.clone())),
-            Field::new("tls_cert", "TLS: certificate", FieldValue::Text(draft.tls_cert.clone())),
-            Field::new("tls_key", "TLS: key", FieldValue::Text(draft.tls_key.clone())),
+            Field::new(
+                "tls_ca",
+                "TLS: CA / truststore",
+                FieldValue::Text(draft.tls_ca.clone()),
+            ),
+            Field::new(
+                "tls_cert",
+                "TLS: certificate",
+                FieldValue::Text(draft.tls_cert.clone()),
+            ),
+            Field::new(
+                "tls_key",
+                "TLS: key",
+                FieldValue::Text(draft.tls_key.clone()),
+            ),
             Field::new(
                 "tls_truststore",
                 "Java: truststore (JKS)",
@@ -1080,7 +1147,7 @@ impl Kafka {
                 "security",
                 "Security",
                 FieldValue::label(&i18n::t(
-                    "Credentials (sasl.jaas.config, truststore/keystore passwords) live in the .properties file above. The plugin never reads, logs or stores secrets; properties with 'password'/'secret'/'token' are rejected."
+                    "For development, paste sasl.jaas.config in the field above: it is saved in plain text with the connection and written to a private file for the CLI. A client properties file keeps credentials outside the plugin. Sensitive keys in Extra properties are rejected.",
                 )),
             ),
         ];
@@ -1150,7 +1217,18 @@ impl Kafka {
         let rows: Vec<Vec<String>> = if self.group_lags.is_empty() {
             self.groups
                 .iter()
-                .map(|g| vec![g.clone(), "-".into(), "-".into(), "-".into(), "-".into(), "-".into(), "-".into(), "-".into()])
+                .map(|g| {
+                    vec![
+                        g.clone(),
+                        "-".into(),
+                        "-".into(),
+                        "-".into(),
+                        "-".into(),
+                        "-".into(),
+                        "-".into(),
+                        "-".into(),
+                    ]
+                })
                 .collect()
         } else {
             self.group_lags
@@ -1160,7 +1238,9 @@ impl Kafka {
                         r.group.clone(),
                         r.topic.clone(),
                         r.partition.to_string(),
-                        r.current.map(|v| v.to_string()).unwrap_or_else(|| "-".into()),
+                        r.current
+                            .map(|v| v.to_string())
+                            .unwrap_or_else(|| "-".into()),
                         r.log_end.to_string(),
                         r.lag.to_string(),
                         r.consumer_id.clone(),
@@ -1172,10 +1252,19 @@ impl Kafka {
         let total = rows.len() as u32;
         let range = Viewport::range(viewport, total, 200);
         let table = Table {
-            columns: ["Group", "Topic", "Partition", "Current offset", "Log-end offset", "Lag", "Consumer", "Client"]
-                .iter()
-                .map(|s| (*s).into())
-                .collect(),
+            columns: [
+                "Group",
+                "Topic",
+                "Partition",
+                "Current offset",
+                "Log-end offset",
+                "Lag",
+                "Consumer",
+                "Client",
+            ]
+            .iter()
+            .map(|s| (*s).into())
+            .collect(),
             total_rows: total,
             first_row: range.start,
             rows: rows[range.start as usize..range.end as usize].to_vec(),
@@ -1202,7 +1291,8 @@ impl Kafka {
             }
             ViewEvent::Select(key) | ViewEvent::Activate(key) => {
                 if let Some(group) = key.strip_prefix("group:") {
-                    self.selected = Selection::Group(group.split(':').last().unwrap_or(group).into());
+                    self.selected =
+                        Selection::Group(group.split(':').last().unwrap_or(group).into());
                 }
             }
             other => {
@@ -1242,7 +1332,11 @@ impl Kafka {
                 rows.push(vec![program.clone(), state.clone(), "-".into()]);
             }
             if let Some(java) = &status.java {
-                rows.push(vec![i18n::t("Java"), java.clone(), i18n::t("needed for the scripts")]);
+                rows.push(vec![
+                    i18n::t("Java"),
+                    java.clone(),
+                    i18n::t("needed for the scripts"),
+                ]);
             }
         } else {
             rows.push(vec![
@@ -1259,7 +1353,10 @@ impl Kafka {
             ]);
         }
         let table = Table {
-            columns: ["Item", "State", "Detail"].iter().map(|s| (*s).into()).collect(),
+            columns: ["Item", "State", "Detail"]
+                .iter()
+                .map(|s| (*s).into())
+                .collect(),
             total_rows: rows.len() as u32,
             first_row: 0,
             rows,
@@ -1271,7 +1368,7 @@ impl Kafka {
                 &[("dir", &info.dir), ("bin", &info.bin)],
             ),
             None => i18n::t(
-                "Download the official distribution and point the process:* capabilities to the extracted scripts."
+                "Download the official distribution and point the process:* capabilities to the extracted scripts.",
             ),
         };
         let hint = i18n::tf(
@@ -1286,7 +1383,12 @@ impl Kafka {
             .status(&hint)
     }
 
-    fn handle_simple(&mut self, event: &ViewEvent, ctx: &Invocation, view: &str) -> Result<(), Error> {
+    fn handle_simple(
+        &mut self,
+        event: &ViewEvent,
+        ctx: &Invocation,
+        view: &str,
+    ) -> Result<(), Error> {
         if let ViewEvent::Button(id) = event {
             let result = self.command(id, ctx, None);
             if let Err(e) = result {
@@ -1314,9 +1416,20 @@ impl Details for Kafka {
                     .clone()
                     .filter(|t| t.name == name)
                     .or_else(|| self.topics.iter().find(|t| t.name == name).cloned())
-                    .unwrap_or_else(|| Topic { name: name.clone(), ..Topic::default() });
-                tabs.push(Tab::new("details", &i18n::t("Details"), Pane::Text(topic_text(&topic))));
-                tabs.push(Tab::new("partitions", &i18n::t("Partitions"), Pane::Text(partitions_text(&topic))));
+                    .unwrap_or_else(|| Topic {
+                        name: name.clone(),
+                        ..Topic::default()
+                    });
+                tabs.push(Tab::new(
+                    "details",
+                    &i18n::t("Details"),
+                    Pane::Text(topic_text(&topic)),
+                ));
+                tabs.push(Tab::new(
+                    "partitions",
+                    &i18n::t("Partitions"),
+                    Pane::Text(partitions_text(&topic)),
+                ));
                 tabs.push(Tab::new(
                     "configs",
                     &i18n::t("Configurations"),
@@ -1328,7 +1441,7 @@ impl Details for Kafka {
                     tabs.push(Tab::new(
                         "live",
                         &i18n::t("Live messages"),
-                        Pane::Log(backend::live_log(&c, &opts)),
+                        Pane::Log(backend::live_log(&c, &opts)?),
                     ));
                 }
             }
@@ -1355,12 +1468,20 @@ impl Details for Kafka {
                     .find(|b| b.id == id)
                     .map(broker_text)
                     .unwrap_or_else(|| {
-                        i18n::tf("Broker {id} not found in the metadata.", &[("id", &id.to_string())])
+                        i18n::tf(
+                            "Broker {id} not found in the metadata.",
+                            &[("id", &id.to_string())],
+                        )
                     });
                 tabs.push(Tab::new("details", &i18n::t("Details"), Pane::Text(text)));
             }
             Selection::Group(name) => {
-                let rows: Vec<GroupLag> = self.group_lags.iter().filter(|r| r.group == name).cloned().collect();
+                let rows: Vec<GroupLag> = self
+                    .group_lags
+                    .iter()
+                    .filter(|r| r.group == name)
+                    .cloned()
+                    .collect();
                 let text = if rows.is_empty() {
                     i18n::tf(
                         "Group {name}: click 'Group Lag' to query offsets.",
@@ -1375,7 +1496,11 @@ impl Details for Kafka {
                 let text = config::by_id(&id)
                     .map(|p| connection_text(&p))
                     .unwrap_or_else(|| i18n::tf("Connection {id} not found.", &[("id", &id)]));
-                tabs.push(Tab::new("details", &i18n::t("Connection"), Pane::Text(text)));
+                tabs.push(Tab::new(
+                    "details",
+                    &i18n::t("Connection"),
+                    Pane::Text(text),
+                ));
                 let scripts = backend::installed_scripts();
                 let paths = if scripts.is_empty() {
                     i18n::t("No distribution installed by the plugin yet.")
@@ -1386,13 +1511,19 @@ impl Details for Kafka {
                         .collect::<Vec<_>>()
                         .join("\n")
                 };
-                tabs.push(Tab::new("scripts", &i18n::t("CLI scripts"), Pane::Text(paths)));
+                tabs.push(Tab::new(
+                    "scripts",
+                    &i18n::t("CLI scripts"),
+                    Pane::Text(paths),
+                ));
             }
             Selection::None => {
                 tabs.push(Tab::new(
                     "empty",
                     &i18n::t("Details"),
-                    Pane::Message(i18n::t("Select a connection, topic, partition, broker or group.")),
+                    Pane::Message(i18n::t(
+                        "Select a connection, topic, partition, broker or group.",
+                    )),
                 ));
             }
         }
@@ -1427,11 +1558,18 @@ fn parse_configs(raw: &str) -> Result<Vec<(String, String)>, Error> {
         if part.is_empty() {
             continue;
         }
-        let (key, value) = part
-            .split_once('=')
-            .ok_or_else(|| i18n::tf("Invalid configuration {part}: use key=value.", &[("part", part)]))?;
+        let (key, value) = part.split_once('=').ok_or_else(|| {
+            i18n::tf(
+                "Invalid configuration {part}: use key=value.",
+                &[("part", part)],
+            )
+        })?;
         if config::is_secret_key(key) {
-            return Err(i18n::tf("Sensitive configuration {key} is not accepted here.", &[("key", key)]).into());
+            return Err(i18n::tf(
+                "Sensitive configuration {key} is not accepted here.",
+                &[("key", key)],
+            )
+            .into());
         }
         out.push((key.trim().into(), value.trim().into()));
     }
@@ -1464,7 +1602,13 @@ fn selection_from_key(key: &str) -> Selection {
 
 fn sanitize(text: &str) -> String {
     text.chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.' { c } else { '-' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.' {
+                c
+            } else {
+                '-'
+            }
+        })
         .collect()
 }
 
@@ -1491,9 +1635,18 @@ fn topic_text(t: &Topic) -> String {
     let mut out = vec![
         i18n::tf("Topic: {name}", &[("name", &t.name)]),
         i18n::tf("TopicId: {id}", &[("id", t.id.as_deref().unwrap_or("-"))]),
-        i18n::tf("Partitions: {count}", &[("count", &t.partitions.to_string())]),
-        i18n::tf("Replication factor: {factor}", &[("factor", &t.replication_factor.to_string())]),
-        i18n::tf("Configurations: {configs}", &[("configs", &format_configs(&t.configs))]),
+        i18n::tf(
+            "Partitions: {count}",
+            &[("count", &t.partitions.to_string())],
+        ),
+        i18n::tf(
+            "Replication factor: {factor}",
+            &[("factor", &t.replication_factor.to_string())],
+        ),
+        i18n::tf(
+            "Configurations: {configs}",
+            &[("configs", &format_configs(&t.configs))],
+        ),
     ];
     if !t.details.is_empty() {
         out.push(String::new());
@@ -1521,24 +1674,41 @@ fn partitions_text(t: &Topic) -> String {
         out.push(format!(
             "{:<10} {:<8} {:<20} {:<20} {:<14} {:<14} {}",
             p.id,
-            p.leader.map(|v| v.to_string()).unwrap_or_else(|| "-".into()),
+            p.leader
+                .map(|v| v.to_string())
+                .unwrap_or_else(|| "-".into()),
             format_ids(&p.replicas),
             format_ids(&p.isr),
-            p.earliest.map(|v| v.to_string()).unwrap_or_else(|| "-".into()),
-            p.latest.map(|v| v.to_string()).unwrap_or_else(|| "-".into()),
+            p.earliest
+                .map(|v| v.to_string())
+                .unwrap_or_else(|| "-".into()),
+            p.latest
+                .map(|v| v.to_string())
+                .unwrap_or_else(|| "-".into()),
             lag,
         ));
     }
     if t.details.is_empty() {
-        out.push(i18n::t("No partitions in the metadata. Refresh the cluster."));
+        out.push(i18n::t(
+            "No partitions in the metadata. Refresh the cluster.",
+        ));
     }
     out.join("\n")
 }
 
 fn partition_text(p: &Partition) -> String {
-    let leader = p.leader.map(|v| v.to_string()).unwrap_or_else(|| "-".into());
-    let start = p.earliest.map(|v| v.to_string()).unwrap_or_else(|| "-".into());
-    let end = p.latest.map(|v| v.to_string()).unwrap_or_else(|| "-".into());
+    let leader = p
+        .leader
+        .map(|v| v.to_string())
+        .unwrap_or_else(|| "-".into());
+    let start = p
+        .earliest
+        .map(|v| v.to_string())
+        .unwrap_or_else(|| "-".into());
+    let end = p
+        .latest
+        .map(|v| v.to_string())
+        .unwrap_or_else(|| "-".into());
     let lag = match (p.earliest, p.latest) {
         (Some(a), Some(b)) => (b - a).max(0).to_string(),
         _ => "-".into(),
@@ -1582,26 +1752,44 @@ fn broker_text(b: &model::Broker) -> String {
 }
 
 fn cluster_text(info: &ClusterInfo, notes: &[String]) -> String {
-    let mut out = vec![i18n::tf("Brokers: {count}", &[("count", &info.brokers.len().to_string())])];
+    let mut out = vec![i18n::tf(
+        "Brokers: {count}",
+        &[("count", &info.brokers.len().to_string())],
+    )];
     if let Some(id) = info.controller_id {
-        out.push(i18n::tf("Controller (KRaft LeaderId): {id}", &[("id", &id.to_string())]));
+        out.push(i18n::tf(
+            "Controller (KRaft LeaderId): {id}",
+            &[("id", &id.to_string())],
+        ));
     }
     if let Some(q) = &info.quorum {
         if !q.cluster_id.is_empty() {
             out.push(i18n::tf("ClusterId: {id}", &[("id", &q.cluster_id)]));
         }
         if let Some(epoch) = q.leader_epoch {
-            out.push(i18n::tf("LeaderEpoch: {epoch}", &[("epoch", &epoch.to_string())]));
+            out.push(i18n::tf(
+                "LeaderEpoch: {epoch}",
+                &[("epoch", &epoch.to_string())],
+            ));
         }
         if let Some(hw) = q.high_watermark {
-            out.push(i18n::tf("HighWatermark: {watermark}", &[("watermark", &hw.to_string())]));
+            out.push(i18n::tf(
+                "HighWatermark: {watermark}",
+                &[("watermark", &hw.to_string())],
+            ));
         }
         if !q.current_voters.is_empty() {
-            out.push(i18n::tf("Voters: {voters}", &[("voters", &q.current_voters)]));
+            out.push(i18n::tf(
+                "Voters: {voters}",
+                &[("voters", &q.current_voters)],
+            ));
         }
     }
     for note in notes {
-        out.push(i18n::tf("Warning: {note}", &[("note", &backend::clip(note, 200))]));
+        out.push(i18n::tf(
+            "Warning: {note}",
+            &[("note", &backend::clip(note, 200))],
+        ));
     }
     out.join(" · ")
 }
@@ -1623,7 +1811,9 @@ fn lag_text(rows: &[GroupLag]) -> String {
             "{:<12} {:<8} {:<16} {:<16} {:<10}",
             r.topic,
             r.partition,
-            r.current.map(|v| v.to_string()).unwrap_or_else(|| "-".into()),
+            r.current
+                .map(|v| v.to_string())
+                .unwrap_or_else(|| "-".into()),
             r.log_end,
             r.lag,
         ));
@@ -1639,18 +1829,24 @@ fn connection_text(c: &Connection) -> String {
     } else {
         c.client_properties.clone()
     };
+    let jaas = if c.sasl_jaas_config.trim().is_empty() {
+        i18n::t("none")
+    } else {
+        i18n::t("inline")
+    };
     let extra = if c.extra_properties.is_empty() {
         i18n::t("none yet")
     } else {
         c.extra_properties.join(", ")
     };
     i18n::tf(
-        "Connection: {name}\nBootstrap servers: {servers}\nSecurity: {security}\nClient properties file: {file}\nExtra properties: {extra}",
+        "Connection: {name}\nBootstrap servers: {servers}\nSecurity: {security}\nClient properties file: {file}\nSASL JAAS config: {jaas}\nExtra properties: {extra}",
         &[
             ("name", &c.name),
             ("servers", &c.bootstrap_servers),
             ("security", &c.security_summary()),
             ("file", &file),
+            ("jaas", &jaas),
             ("extra", &extra),
         ],
     )
@@ -1798,7 +1994,9 @@ mod tests {
         plugin.activate(&host.context("brunornasc.kafka")).unwrap();
         plugin.expanded.insert("cat:local:topics".into());
         let view = plugin.render_explorer();
-        let Body::Tree(items) = view.body else { panic!("expected tree") };
+        let Body::Tree(items) = view.body else {
+            panic!("expected tree")
+        };
         assert!(items.iter().any(|i| i.key == "conn:local"));
         assert!(items.iter().any(|i| i.key == "cat:local:topics"));
         assert!(items.iter().any(|i| i.key == "topic:local:pedidos"));
@@ -1818,7 +2016,11 @@ mod tests {
             .unwrap();
         assert!(out.contains("saved and activated"));
         assert_eq!(config::active_id().as_deref(), Some("local"));
-        assert!(host.process_runs().iter().any(|r| r.args.contains(&"--list".to_owned())));
+        assert!(
+            host.process_runs()
+                .iter()
+                .any(|r| r.args.contains(&"--list".to_owned()))
+        );
     }
 
     #[test]
@@ -1831,10 +2033,11 @@ mod tests {
         // confirm() consome uma resposta; sem ela o comando é cancelado.
         let result = plugin.command("topic-delete", &host.invocation(), Some("pedidos"));
         assert!(result.is_ok(), "confirmado: {:?}", result);
-        assert!(host
-            .process_runs()
-            .iter()
-            .any(|r| r.args.contains(&"--delete".to_owned())));
+        assert!(
+            host.process_runs()
+                .iter()
+                .any(|r| r.args.contains(&"--delete".to_owned()))
+        );
     }
 
     #[test]
@@ -1849,7 +2052,9 @@ mod tests {
         host.on_process(backend::CONSUMER, move |_, _| ok(&record));
         let mut plugin = Kafka::default();
         plugin.activate(&host.context("brunornasc.kafka")).unwrap();
-        let count = plugin.command("consume", &host.invocation(), Some("pedidos")).unwrap();
+        let count = plugin
+            .command("consume", &host.invocation(), Some("pedidos"))
+            .unwrap();
         assert!(count.unwrap().contains("1 messages read"));
         assert_eq!(plugin.messages.records.len(), 1);
         assert_eq!(plugin.messages.records[0].key.as_deref(), Some("k"));
@@ -1862,14 +2067,23 @@ mod tests {
         active_connection(&host);
         let mut plugin = Kafka::default();
         plugin.activate(&host.context("brunornasc.kafka")).unwrap();
-        plugin.handle_messages(ViewEvent::Message(
-            json!({"action": "prefs", "topic": "pedidos", "limit": 5}).to_string(),
-        ), &host.invocation()).unwrap();
+        plugin
+            .handle_messages(
+                ViewEvent::Message(
+                    json!({"action": "prefs", "topic": "pedidos", "limit": 5}).to_string(),
+                ),
+                &host.invocation(),
+            )
+            .unwrap();
         assert_eq!(plugin.prefs.topic, "pedidos");
         plugin.handle_messages(ViewEvent::Message(
             json!({"action": "publish", "topic": "pedidos", "key": "k", "value": "v", "headers": "trace=abc"}).to_string(),
         ), &host.invocation()).unwrap();
-        assert!(host.process_runs().iter().any(|r| r.program == backend::PRODUCER));
+        assert!(
+            host.process_runs()
+                .iter()
+                .any(|r| r.program == backend::PRODUCER)
+        );
     }
 
     #[test]
@@ -1878,14 +2092,18 @@ mod tests {
         active_connection(&host);
         let mut plugin = Kafka::default();
         plugin.activate(&host.context("brunornasc.kafka")).unwrap();
-        plugin.inspect_topic(&config::active().unwrap(), "pedidos").unwrap();
+        plugin
+            .inspect_topic(&config::active().unwrap(), "pedidos")
+            .unwrap();
         let tabs = plugin
             .detail(EXPLORER, "topic:local:pedidos", &host.invocation())
             .unwrap();
         assert!(tabs.iter().any(|t| t.id == "details"));
         assert!(tabs.iter().any(|t| t.id == "partitions"));
         assert!(tabs.iter().any(|t| t.id == "live"));
-        let Pane::Text(text) = &tabs[1].body else { panic!("expected text") };
+        let Pane::Text(text) = &tabs[1].body else {
+            panic!("expected text")
+        };
         assert!(text.contains("Start offset"));
         assert!(text.contains("12"));
     }
@@ -1900,7 +2118,10 @@ mod tests {
         plugin.reload().unwrap();
         assert!(plugin.status.contains("2 tópicos"), "{}", plugin.status);
         let state: Value = serde_json::from_str(&plugin.messages_state()).unwrap();
-        assert!(state["i18n"].get("Refresh").is_some(), "HTML catalog is shipped");
+        assert!(
+            state["i18n"].get("Refresh").is_some(),
+            "HTML catalog is shipped"
+        );
         assert_eq!(state["i18n"]["Refresh"], "Atualizar");
 
         // Forcing en-US keeps the plugin's own text English even on a pt-BR IDE.
@@ -1927,9 +2148,12 @@ mod tests {
         active_connection(&host);
         let plugin = Kafka::default();
         let view = plugin.render_connections();
-        let Body::Form(fields) = view.body else { panic!("expected form") };
+        let Body::Form(fields) = view.body else {
+            panic!("expected form")
+        };
         assert!(fields.iter().all(|f| !f.key.contains("password")));
         assert!(fields.iter().any(|f| f.key == "client_properties"));
+        assert!(fields.iter().any(|f| f.key == "sasl_jaas_config"));
         assert!(fields.iter().any(|f| f.key == "security_protocol"));
     }
 }

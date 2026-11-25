@@ -276,12 +276,16 @@ pub fn parse_broker_versions(stdout: &str) -> Vec<Broker> {
         if is_noise(line) || !line.contains("id:") {
             continue;
         }
-        let Some(id) = field(line, "id").and_then(|v| v.trim_end_matches(',').parse::<i32>().ok()) else {
+        let Some(id) = field(line, "id").and_then(|v| v.trim_end_matches(',').parse::<i32>().ok())
+        else {
             continue;
         };
         let endpoint = line.split_whitespace().next().unwrap_or("");
         let (host, port) = endpoint.rsplit_once(':').unwrap_or((endpoint, "9092"));
-        let port = port.trim_end_matches(|c: char| !c.is_ascii_digit()).parse::<u16>().unwrap_or(9092);
+        let port = port
+            .trim_end_matches(|c: char| !c.is_ascii_digit())
+            .parse::<u16>()
+            .unwrap_or(9092);
         if brokers.iter().any(|b: &Broker| b.id == id) {
             continue;
         }
@@ -289,7 +293,9 @@ pub fn parse_broker_versions(stdout: &str) -> Vec<Broker> {
             id,
             host: host.trim_start_matches('[').trim_end_matches(']').into(),
             port,
-            rack: field(line, "rack").filter(|r| r != "null").unwrap_or_default(),
+            rack: field(line, "rack")
+                .filter(|r| r != "null")
+                .unwrap_or_default(),
             status: crate::i18n::t("available"),
         });
     }
@@ -334,7 +340,10 @@ pub fn parse_offsets(stdout: &str) -> Vec<(String, i32, i64)> {
         {
             let topic = line[..bracket].trim();
             let partition = line[bracket + 1..bracket + end].trim().parse::<i32>();
-            let offset = line.rsplit("offset:").next().and_then(|s| s.trim().parse::<i64>().ok());
+            let offset = line
+                .rsplit("offset:")
+                .next()
+                .and_then(|s| s.trim().parse::<i64>().ok());
             if let (Ok(partition), Some(offset)) = (partition, offset) {
                 out.push((topic.into(), partition, offset));
                 continue;
@@ -379,7 +388,12 @@ fn parse_headers(text: &str) -> Vec<(String, Option<String>)> {
 /// Converte a saída do `DefaultMessageFormatter` com separadores de controle.
 /// Ignora avisos de depreciação impressos no stdout antes do primeiro registro.
 pub fn parse_messages(stdout: &str, topic: &str) -> Vec<MessageRecord> {
-    const LABELS: [&str; 4] = ["CreateTime:", "LogAppendTime:", "NO_TIMESTAMP", "Partition:"];
+    const LABELS: [&str; 4] = [
+        "CreateTime:",
+        "LogAppendTime:",
+        "NO_TIMESTAMP",
+        "Partition:",
+    ];
     let mut out = Vec::new();
     for chunk in stdout.split(RECORD_SEP) {
         let chunk = chunk.trim_matches('\n').trim_matches('\r');
@@ -393,7 +407,11 @@ pub fn parse_messages(stdout: &str, topic: &str) -> Vec<MessageRecord> {
             .min()
             .unwrap_or(0);
         let record = &chunk[start..];
-        let separator = if record.contains(FIELD_SEP) { FIELD_SEP } else { '\t' };
+        let separator = if record.contains(FIELD_SEP) {
+            FIELD_SEP
+        } else {
+            '\t'
+        };
         let parts: Vec<&str> = record.split(separator).collect();
         if parts.len() < 6 {
             continue;

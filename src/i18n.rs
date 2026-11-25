@@ -61,7 +61,10 @@ mod tests {
     fn english_is_the_default() {
         let _host = crate::mock_host(); // locale "en"
         assert_eq!(t("Refresh"), "Refresh");
-        assert_eq!(tf("Topic {name} created.", &[("name", "pedidos")]), "Topic pedidos created.");
+        assert_eq!(
+            tf("Topic {name} created.", &[("name", "pedidos")]),
+            "Topic pedidos created."
+        );
     }
 
     #[test]
@@ -69,7 +72,10 @@ mod tests {
         let host = crate::mock_host();
         host.set_locale("pt-BR");
         assert_eq!(t("Refresh"), "Atualizar");
-        assert_eq!(tf("Topic {name} created.", &[("name", "pedidos")]), "Tópico pedidos criado.");
+        assert_eq!(
+            tf("Topic {name} created.", &[("name", "pedidos")]),
+            "Tópico pedidos criado."
+        );
     }
 
     #[test]
@@ -86,6 +92,9 @@ mod tests {
     fn unknown_text_falls_back_to_english() {
         let host = crate::mock_host();
         host.set_locale("pt-BR");
-        assert_eq!(t("Something not in the catalog"), "Something not in the catalog");
+        assert_eq!(
+            t("Something not in the catalog"),
+            "Something not in the catalog"
+        );
     }
 }

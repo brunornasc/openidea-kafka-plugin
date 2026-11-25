@@ -7,8 +7,10 @@
 //! `--command-property`, `--formatter-property`): `execute` tenta a forma
 //! moderna e cai para a antiga quando a CLI rejeita uma opção.
 //!
-//! Credenciais nunca passam por aqui: o arquivo `--command-config` é
-//! referenciado apenas pelo caminho e a saída dos processos é redigida.
+//! Credenciais nunca aparecem em `argv`: o arquivo `--command-config` é
+//! referenciado apenas pelo caminho (quando o usuário informa um arquivo) ou
+//! escrito no diretório privado do plugin a partir do JAAS inline, e a saída
+//! dos processos é redigida.
 
 use crate::config::{self, Connection};
 use crate::i18n;
@@ -101,22 +103,34 @@ fn classify(output: &ProcessOutput, program: &str) -> Option<Error> {
         || lower.contains("login failed")
         || lower.contains("security.disable")
     {
-        i18n::t("Authentication failed. Check security.protocol, the SASL mechanism and the credentials in the client properties file (sasl.jaas.config).")
+        i18n::t(
+            "Authentication failed. Check security.protocol, the SASL mechanism and the credentials (client properties file or inline JAAS).",
+        )
     } else if lower.contains("authorization")
         || lower.contains("not authorized")
         || lower.contains("acl")
     {
-        i18n::t("The cluster refused the operation due to permissions/ACL. Check the user's grants.")
+        i18n::t(
+            "The cluster refused the operation due to permissions/ACL. Check the user's grants.",
+        )
     } else if lower.contains("timed out")
         || lower.contains("timeout")
         || lower.contains("timeoutexception")
     {
-        i18n::t("Timed out talking to the cluster. Check the bootstrap servers, the network and request.timeout.ms in the client properties.")
+        i18n::t(
+            "Timed out talking to the cluster. Check the bootstrap servers, the network and request.timeout.ms in the client properties.",
+        )
     } else if lower.contains("connection refused") || lower.contains("disconnected") {
-        i18n::t("Could not connect to the broker. Check the host/port and whether the cluster is up.")
-    } else if lower.contains("unknown_topic") || lower.contains("topic") && lower.contains("does not exist") {
+        i18n::t(
+            "Could not connect to the broker. Check the host/port and whether the cluster is up.",
+        )
+    } else if lower.contains("unknown_topic")
+        || lower.contains("topic") && lower.contains("does not exist")
+    {
         i18n::t("Topic not found in the cluster.")
-    } else if lower.contains("no such file") || lower.contains("not found") && lower.contains("program") {
+    } else if lower.contains("no such file")
+        || lower.contains("not found") && lower.contains("program")
+    {
         i18n::tf(
             "Program {program} not found. Point the process:{program} capability to the installed script.",
             &[("program", program)],
@@ -132,7 +146,11 @@ fn classify(output: &ProcessOutput, program: &str) -> Option<Error> {
             let status = format!("{:?}", output.status);
             i18n::tf(
                 "{program} failed (status {status}): {detail}",
-                &[("program", program), ("status", &status), ("detail", &clip(&detail, 900))],
+                &[
+                    ("program", program),
+                    ("status", &status),
+                    ("detail", &clip(&detail, 900)),
+                ],
             )
         }
     };
@@ -194,33 +212,106 @@ fn run_compat(
 fn execute(
     c: &Connection,
     tool: Tool,
-    specific: impl Fn(bool) -> Vec<String>,
+    specific: impl Fn(bool) -> Result<Vec<String>, Error>,
     stdin: Option<&str>,
 ) -> Result<ProcessOutput, Error> {
-    let modern = build(c, tool, true, specific(true));
-    let legacy = build(c, tool, false, specific(false));
+    let modern = build(c, tool, true, specific(true)?)?;
+    let legacy = build(c, tool, false, specific(false)?)?;
     run_compat(tool.program(), modern, legacy, stdin)
 }
 
-fn build(c: &Connection, tool: Tool, modern: bool, specific: Vec<String>) -> Vec<String> {
-    strings(&["--bootstrap-server", &c.bootstrap_servers])
+fn build(
+    c: &Connection,
+    tool: Tool,
+    modern: bool,
+    specific: Vec<String>,
+) -> Result<Vec<String>, Error> {
+    Ok(strings(&["--bootstrap-server", &c.bootstrap_servers])
         .into_iter()
         .chain(specific)
-        .chain(client_props(c, tool, modern))
-        .collect()
+        .chain(client_props(c, tool, modern)?)
+        .collect())
+}
+
+/// Hash estável para o nome do arquivo gerado a partir do JAAS inline.
+fn stable_hash(text: &str) -> u64 {
+    let mut hash = 0xcbf29ce484222325u64;
+    for byte in text.as_bytes() {
+        hash ^= *byte as u64;
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    hash
+}
+
+/// JAAS pode vir quebrado em várias linhas; em um arquivo `.properties` ele
+/// precisa ser uma única linha. Barras invertidas são escapadas para o
+/// carregador de propriedades Java não alterar a senha.
+fn one_line_jaas(text: &str) -> String {
+    let mut out = String::new();
+    let mut after_newline = false;
+    for ch in text.trim().chars() {
+        if after_newline {
+            if ch.is_whitespace() {
+                continue;
+            }
+            if !out.ends_with(' ') && !out.ends_with('\t') {
+                out.push(' ');
+            }
+            after_newline = false;
+        }
+        if matches!(ch, '\r' | '\n') {
+            after_newline = true;
+        } else if ch == '\\' {
+            out.push_str("\\\\");
+        } else {
+            out.push(ch);
+        }
+    }
+    out
+}
+
+/// Caminho do `--command-config`: o arquivo do usuário, ou um arquivo no
+/// diretório privado do plugin escrito a partir do JAAS inline. Nenhum segredo
+/// aparece em `argv` — apenas o caminho.
+fn properties_path(c: &Connection) -> Result<Option<String>, Error> {
+    if !c.client_properties.trim().is_empty() {
+        return Ok(Some(c.client_properties.clone()));
+    }
+    if c.sasl_jaas_config.trim().is_empty() {
+        return Ok(None);
+    }
+    let dir = host::fs::plugin_dir()?;
+    let hash = stable_hash(&format!(
+        "{}|{}|{}",
+        c.id, c.security_protocol, c.sasl_jaas_config
+    ));
+    let path = format!("{dir}/kafka-client-{hash:016x}.properties");
+    let body = format!(
+        "security.protocol={}\nsasl.mechanism={}\nsasl.jaas.config={}\n",
+        c.security_protocol,
+        c.sasl_mechanism,
+        one_line_jaas(&c.sasl_jaas_config)
+    );
+    host::fs::write_file(&path, &body).map_err(|e| {
+        Error::Failed(i18n::tf(
+            "Could not write the inline JAAS properties file: {error}",
+            &[("error", &e.to_string())],
+        ))
+    })?;
+    Ok(Some(path))
 }
 
 /// `--command-config` / `--*.config` e propriedades extras não sensíveis.
-fn client_props(c: &Connection, tool: Tool, modern: bool) -> Vec<String> {
+fn client_props(c: &Connection, tool: Tool, modern: bool) -> Result<Vec<String>, Error> {
     let mut out = Vec::new();
     let config_flag = match (tool, modern) {
         (Tool::Consumer, false) => "--consumer.config",
         (Tool::Producer, false) => "--producer.config",
         _ => "--command-config",
     };
-    if !c.client_properties.trim().is_empty() {
+    if let Some(path) = properties_path(c)? {
         out.push(config_flag.into());
-        out.push(c.client_properties.clone());
+        out.push(path);
     }
     let property_flag = match (tool, modern) {
         (Tool::Consumer, false) => "--consumer-property",
@@ -234,7 +325,7 @@ fn client_props(c: &Connection, tool: Tool, modern: bool) -> Vec<String> {
             out.push(format!("{key}={value}"));
         }
     }
-    out
+    Ok(out)
 }
 
 fn strings(items: &[&str]) -> Vec<String> {
@@ -255,17 +346,12 @@ pub fn clip(text: &str, max: usize) -> String {
 /// Testa a conexão antes de salvar (lista tópicos).
 pub fn test_connection(c: &Connection) -> Result<usize, Error> {
     c.validate()?;
-    let out = execute(
-        c,
-        Tool::Topics,
-        |_| strings(&["--list"]),
-        None,
-    )?;
+    let out = execute(c, Tool::Topics, |_| Ok(strings(&["--list"])), None)?;
     Ok(model::parse_topic_list(&out.stdout).len())
 }
 
 pub fn list_topics(c: &Connection) -> Result<Vec<String>, Error> {
-    let out = execute(c, Tool::Topics, |_| strings(&["--list"]), None)?;
+    let out = execute(c, Tool::Topics, |_| Ok(strings(&["--list"])), None)?;
     Ok(model::parse_topic_list(&out.stdout))
 }
 
@@ -276,21 +362,28 @@ pub fn describe_topics(c: &Connection, topic: Option<&str>) -> Result<Vec<Topic>
         c,
         Tool::Topics,
         |_| {
-            let mut args = vec!["--describe".to_owned()];
-            if !name.is_empty() {
-                args.extend(strings(&["--topic", &name]));
-            }
-            args
+            Ok({
+                let mut args = vec!["--describe".to_owned()];
+                if !name.is_empty() {
+                    args.extend(strings(&["--topic", &name]));
+                }
+                args
+            })
         },
         None,
     )?;
     let mut topics = model::parse_topic_describe(&out.stdout);
     // `--describe` sem tópico pode não trazer todas as configs; a lista evita
     // que um tópico sem partições declaradas desapareça.
-    if topic.is_none() && let Ok(names) = list_topics(c) {
+    if topic.is_none()
+        && let Ok(names) = list_topics(c)
+    {
         for n in names {
             if !topics.iter().any(|t| t.name == n) {
-                topics.push(Topic { name: n, ..Topic::default() });
+                topics.push(Topic {
+                    name: n,
+                    ..Topic::default()
+                });
             }
         }
         topics.sort_by(|a, b| a.name.cmp(&b.name));
@@ -323,7 +416,7 @@ pub fn create_topic(
         }
         specific.extend(strings(&["--config", &format!("{key}={value}")]));
     }
-    let out = execute(c, Tool::Topics, move |_| specific.clone(), None)?;
+    let out = execute(c, Tool::Topics, move |_| Ok(specific.clone()), None)?;
     let _ = out;
     Ok(())
 }
@@ -336,7 +429,7 @@ pub fn delete_topic(c: &Connection, name: &str) -> Result<(), Error> {
     execute(
         c,
         Tool::Topics,
-        move |_| strings(&["--delete", "--topic", &name]),
+        move |_| Ok(strings(&["--delete", "--topic", &name])),
         None,
     )?;
     Ok(())
@@ -350,7 +443,7 @@ pub fn offsets(c: &Connection, topic: &str, earliest: bool) -> Result<Vec<(i32, 
     let result = execute(
         c,
         Tool::Offsets,
-        |_| strings(&["--topic", &topic, "--time", time]),
+        |_| Ok(strings(&["--topic", &topic, "--time", time])),
         None,
     );
     let out = match result {
@@ -366,8 +459,8 @@ pub fn offsets(c: &Connection, topic: &str, earliest: bool) -> Result<Vec<(i32, 
                 "--time",
                 time,
             ]);
-            if !c.client_properties.is_empty() {
-                args.extend(strings(&["--command-config", &c.client_properties]));
+            if let Some(path) = properties_path(c)? {
+                args.extend(strings(&["--command-config", &path]));
             }
             match raw(RUN_CLASS, &args, None) {
                 Ok(out) if out.status == Some(0) => out,
@@ -385,7 +478,10 @@ pub fn offsets(c: &Connection, topic: &str, earliest: bool) -> Result<Vec<(i32, 
 /// Preenche `earliest`/`latest` das partições de um tópico (melhor esforço).
 pub fn fill_offsets(c: &Connection, topic: &mut Topic) -> Vec<String> {
     let mut notes = Vec::new();
-    match (offsets(c, &topic.name, true), offsets(c, &topic.name, false)) {
+    match (
+        offsets(c, &topic.name, true),
+        offsets(c, &topic.name, false),
+    ) {
         (Ok(first), Ok(last)) => {
             for p in &mut topic.details {
                 p.earliest = first.iter().find(|(id, _)| *id == p.id).map(|(_, o)| *o);
@@ -398,7 +494,7 @@ pub fn fill_offsets(c: &Connection, topic: &mut Topic) -> Vec<String> {
 }
 
 pub fn list_groups(c: &Connection) -> Result<Vec<String>, Error> {
-    let out = execute(c, Tool::Groups, |_| strings(&["--list"]), None)?;
+    let out = execute(c, Tool::Groups, |_| Ok(strings(&["--list"])), None)?;
     Ok(model::parse_group_list(&out.stdout))
 }
 
@@ -407,7 +503,7 @@ pub fn describe_group(c: &Connection, group: &str) -> Result<Vec<GroupLag>, Erro
     let out = execute(
         c,
         Tool::Groups,
-        move |_| strings(&["--describe", "--group", &group]),
+        move |_| Ok(strings(&["--describe", "--group", &group])),
         None,
     )?;
     Ok(model::parse_group_describe(&out.stdout))
@@ -417,17 +513,25 @@ pub fn describe_group(c: &Connection, group: &str) -> Result<Vec<GroupLag>, Erro
 pub fn cluster_info(c: &Connection) -> (ClusterInfo, Vec<String>) {
     let mut info = ClusterInfo::default();
     let mut notes = Vec::new();
-    match execute(c, Tool::Brokers, |_| Vec::new(), None) {
+    match execute(c, Tool::Brokers, |_| Ok(Vec::new()), None) {
         Ok(out) => info.brokers = model::parse_broker_versions(&out.stdout),
         Err(e) => notes.push(e.to_string()),
     }
-    match execute(c, Tool::Quorum, |_| strings(&["describe", "--status"]), None) {
+    match execute(
+        c,
+        Tool::Quorum,
+        |_| Ok(strings(&["describe", "--status"])),
+        None,
+    ) {
         Ok(out) => {
             let quorum: Option<QuorumInfo> = model::parse_quorum(&out.stdout);
             info.controller_id = quorum.as_ref().and_then(|q| q.leader_id);
             info.quorum = quorum;
         }
-        Err(e) => notes.push(i18n::tf("Controller metadata unavailable: {error}", &[("error", &e.to_string())])),
+        Err(e) => notes.push(i18n::tf(
+            "Controller metadata unavailable: {error}",
+            &[("error", &e.to_string())],
+        )),
     }
     if let Some(id) = info.controller_id {
         for b in &mut info.brokers {
@@ -466,7 +570,11 @@ fn formatter_args(flag: &str, properties: &[String]) -> Vec<String> {
 /// Leitura estruturada: separadores de controle preservam valores com tabs,
 /// vírgulas e quebras de linha.
 fn formatter_props(modern: bool) -> Vec<String> {
-    let flag = if modern { "--formatter-property" } else { "--property" };
+    let flag = if modern {
+        "--formatter-property"
+    } else {
+        "--property"
+    };
     let properties = [
         "print.timestamp=true".into(),
         "print.partition=true".into(),
@@ -484,7 +592,11 @@ fn formatter_props(modern: bool) -> Vec<String> {
 
 /// Log ao vivo: formato legível para humanos (a aba de log não é parseada).
 fn live_formatter_props(modern: bool) -> Vec<String> {
-    let flag = if modern { "--formatter-property" } else { "--property" };
+    let flag = if modern {
+        "--formatter-property"
+    } else {
+        "--property"
+    };
     let properties = [
         "print.timestamp=true".into(),
         "print.partition=true".into(),
@@ -500,7 +612,11 @@ fn live_formatter_props(modern: bool) -> Vec<String> {
 }
 
 /// Argumentos do console consumer. `live` remove `--max-messages`/`--timeout-ms`.
-pub fn consume_args(c: &Connection, opts: &ConsumeOptions, modern: bool) -> Vec<String> {
+pub fn consume_args(
+    c: &Connection,
+    opts: &ConsumeOptions,
+    modern: bool,
+) -> Result<Vec<String>, Error> {
     let mut args = strings(&["--topic", &opts.topic]);
     if let Some(partition) = opts.partition {
         args.extend(strings(&["--partition", &partition.to_string()]));
@@ -531,7 +647,9 @@ pub fn consume(c: &Connection, opts: &ConsumeOptions) -> Result<Vec<MessageRecor
     }
     if opts.start == "offset" {
         if opts.partition.is_none() {
-            return Err(i18n::t("To consume from a specific offset, also specify the partition.").into());
+            return Err(
+                i18n::t("To consume from a specific offset, also specify the partition.").into(),
+            );
         }
         if opts.offset.trim().parse::<i64>().is_err() {
             return Err(i18n::t("Invalid start offset: use a non-negative integer.").into());
@@ -548,17 +666,21 @@ pub fn consume(c: &Connection, opts: &ConsumeOptions) -> Result<Vec<MessageRecor
 }
 
 /// Log nativo do IDE que acompanha o tópico em tempo real (sem polling).
-pub fn live_log(c: &Connection, opts: &ConsumeOptions) -> ProcessLog {
+pub fn live_log(c: &Connection, opts: &ConsumeOptions) -> Result<ProcessLog, Error> {
     let mut live = opts.clone();
     live.live = true;
     let modern = config::cli_flavour() != "kafka3";
-    let args = consume_args(c, &live, modern);
+    let args = consume_args(c, &live, modern)?;
     let refs: Vec<&str> = args.iter().map(String::as_str).collect();
     let mut log = ProcessLog::new(CONSUMER, &refs);
     if live.partition.is_none() && live.start != "beginning" {
-        log = log.toggle("from-beginning", &i18n::t("From the beginning"), &["--from-beginning"]);
+        log = log.toggle(
+            "from-beginning",
+            &i18n::t("From the beginning"),
+            &["--from-beginning"],
+        );
     }
-    log
+    Ok(log)
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -616,13 +738,15 @@ pub fn publish(c: &Connection, msg: &PublishMessage) -> Result<(), Error> {
         c,
         Tool::Producer,
         |_| {
-            let mut args = strings(&["--topic", &msg.topic, "--sync"]);
-            for prop in producer_reader_props(&msg) {
-                // O produtor usa `--property` (3.x) ou `--reader-property` (4.2);
-                // `--property` continua aceito nas duas com um aviso.
-                args.extend(strings(&["--property", &prop]));
-            }
-            args
+            Ok({
+                let mut args = strings(&["--topic", &msg.topic, "--sync"]);
+                for prop in producer_reader_props(&msg) {
+                    // O produtor usa `--property` (3.x) ou `--reader-property` (4.2);
+                    // `--property` continua aceito nas duas com um aviso.
+                    args.extend(strings(&["--property", &prop]));
+                }
+                args
+            })
         },
         Some(&publish_input(&msg)),
     )?;
@@ -672,9 +796,12 @@ fn publish_with_kcat(c: &Connection, msg: &PublishMessage) -> Result<(), Error> 
 /// Catálogo de versões: índice do Apache (opcional) + lista embutida.
 pub fn available_versions() -> Vec<String> {
     let mut versions: Vec<String> = BUILTIN_VERSIONS.iter().map(|s| (*s).into()).collect();
-    let request = HttpRequest::get("https://downloads.apache.org/kafka/")
-        .header("Accept", "text/html");
-    let request = HttpRequest { timeout_ms: Some(10_000), ..request };
+    let request =
+        HttpRequest::get("https://downloads.apache.org/kafka/").header("Accept", "text/html");
+    let request = HttpRequest {
+        timeout_ms: Some(10_000),
+        ..request
+    };
     if let Ok(response) = host::fetch(&request)
         && response.status == 200
     {
@@ -695,9 +822,7 @@ pub fn available_versions() -> Vec<String> {
 }
 
 fn compare_versions(a: &str, b: &str) -> std::cmp::Ordering {
-    let nums = |s: &str| -> Vec<u64> {
-        s.split('.').map(|p| p.parse().unwrap_or(0)).collect()
-    };
+    let nums = |s: &str| -> Vec<u64> { s.split('.').map(|p| p.parse().unwrap_or(0)).collect() };
     nums(a).cmp(&nums(b))
 }
 
@@ -717,14 +842,25 @@ pub fn install(version: &str, force: bool) -> Result<config::InstallInfo, Error>
     let root = format!("{}/kafka_2.13-{version}", dir.trim_end_matches('/'));
     let bin = format!("{root}/bin");
     if !force && host::fs::stat(&format!("{bin}/{TOPICS}")).is_ok() {
-        let info = config::InstallInfo { version: version.into(), dir: root, bin };
+        let info = config::InstallInfo {
+            version: version.into(),
+            dir: root,
+            bin,
+        };
         config::set_install_info(&info)?;
         return Ok(info);
     }
     let url = config::download_url(version);
     let tarball = format!("{dir}/kafka_2.13-{version}.tgz");
-    let task = host::begin_task(&i18n::tf("Kafka: installing {version}", &[("version", version)]), true);
-    task.report(1, Some(3), Some(&i18n::t("Downloading the Apache Kafka tarball")));
+    let task = host::begin_task(
+        &i18n::tf("Kafka: installing {version}", &[("version", version)]),
+        true,
+    );
+    task.report(
+        1,
+        Some(3),
+        Some(&i18n::t("Downloading the Apache Kafka tarball")),
+    );
     run(
         CURL,
         &strings(&[
@@ -743,11 +879,7 @@ pub fn install(version: &str, force: bool) -> Result<config::InstallInfo, Error>
         return Err(Error::Cancelled);
     }
     task.report(2, Some(3), Some(&i18n::t("Extracting the distribution")));
-    run(
-        TAR,
-        &strings(&["-xzf", &tarball, "-C", &dir]),
-        None,
-    )?;
+    run(TAR, &strings(&["-xzf", &tarball, "-C", &dir]), None)?;
     task.report(3, Some(3), Some(&i18n::t("Verifying the scripts")));
     let expected = format!("{bin}/{TOPICS}");
     host::fs::stat(&expected).map_err(|_| {
@@ -756,7 +888,11 @@ pub fn install(version: &str, force: bool) -> Result<config::InstallInfo, Error>
             &[("path", &expected)],
         )
     })?;
-    let info = config::InstallInfo { version: version.into(), dir: root, bin: bin.clone() };
+    let info = config::InstallInfo {
+        version: version.into(),
+        dir: root,
+        bin: bin.clone(),
+    };
     config::set_install_info(&info)?;
     Ok(info)
 }
@@ -811,17 +947,18 @@ pub fn installed_scripts() -> Vec<(String, String)> {
     let Some(info) = config::install_info() else {
         return Vec::new();
     };
-    [TOPICS, CONSUMER, PRODUCER, GROUPS, OFFSETS, RUN_CLASS, BROKERS, QUORUM]
-        .iter()
-        .map(|p| ((*p).into(), format!("{}/{p}", info.bin)))
-        .collect()
+    [
+        TOPICS, CONSUMER, PRODUCER, GROUPS, OFFSETS, RUN_CLASS, BROKERS, QUORUM,
+    ]
+    .iter()
+    .map(|p| ((*p).into(), format!("{}/{p}", info.bin)))
+    .collect()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::config::Connection;
-    
 
     fn connection() -> Connection {
         let mut c = Connection::new("local", "Local");
@@ -830,7 +967,11 @@ mod tests {
     }
 
     fn ok(stdout: &str) -> Result<ProcessOutput, Error> {
-        Ok(ProcessOutput { status: Some(0), stdout: stdout.into(), stderr: String::new() })
+        Ok(ProcessOutput {
+            status: Some(0),
+            stdout: stdout.into(),
+            stderr: String::new(),
+        })
     }
 
     #[test]
@@ -858,11 +999,50 @@ mod tests {
         host.on_process(TOPICS, |args, _| {
             let joined = args.join(" ");
             assert!(joined.contains("--command-config /home/user/kafka.properties"));
+            assert!(joined.contains("security.protocol=SASL_SSL"));
+            assert!(joined.contains("sasl.mechanism=SCRAM-SHA-256"));
             assert!(joined.contains("request.timeout.ms=10000"));
             assert!(!joined.contains("password"));
             ok("t\n")
         });
         list_topics(&c).unwrap();
+    }
+
+    #[test]
+    fn inline_jaas_goes_to_a_private_file_not_to_argv() {
+        let host = crate::mock_host();
+        let mut c = connection();
+        c.security_protocol = "SASL_PLAINTEXT".into();
+        c.sasl_mechanism = "PLAIN".into();
+        c.sasl_jaas_config =
+            "org.example.LoginModule required\n  username=\"dev\" password=\"super\\secret\";"
+                .into();
+        let seen = std::rc::Rc::new(std::cell::RefCell::new(String::new()));
+        let capture = seen.clone();
+        host.on_process(TOPICS, move |args, _| {
+            let i = args.iter().position(|a| a == "--command-config").unwrap();
+            *capture.borrow_mut() = args[i + 1].clone();
+            ok("t\n")
+        });
+        list_topics(&c).unwrap();
+
+        let path = seen.borrow().clone();
+        assert!(path.starts_with(&host::fs::plugin_dir().unwrap()), "{path}");
+        let body = host::fs::read_file(&path).unwrap();
+        assert!(body.contains("security.protocol=SASL_PLAINTEXT"), "{body}");
+        assert!(body.contains("sasl.mechanism=PLAIN"), "{body}");
+        let jaas_line = body.lines().nth(2).unwrap();
+        assert_eq!(
+            jaas_line,
+            "sasl.jaas.config=org.example.LoginModule required username=\"dev\" password=\"super\\\\secret\";",
+            "multiline JAAS must become one escaped properties line: {body}"
+        );
+        assert!(
+            host.process_runs()
+                .iter()
+                .all(|r| !r.args.iter().any(|a| a.contains("LoginModule"))),
+            "the secret must not appear in argv"
+        );
     }
 
     #[test]
@@ -920,15 +1100,22 @@ mod tests {
             ..ConsumeOptions::default()
         };
         assert!(consume(&c, &opts).is_err(), "sem partição");
-        let opts = ConsumeOptions { partition: Some(0), offset: "abc".into(), ..opts };
+        let opts = ConsumeOptions {
+            partition: Some(0),
+            offset: "abc".into(),
+            ..opts
+        };
         assert!(consume(&c, &opts).is_err(), "offset inválido");
     }
 
     #[test]
     fn live_log_never_limits_the_consumer() {
         let _host = crate::mock_host();
-        let opts = ConsumeOptions { topic: "t".into(), ..ConsumeOptions::default() };
-        let log = live_log(&connection(), &opts);
+        let opts = ConsumeOptions {
+            topic: "t".into(),
+            ..ConsumeOptions::default()
+        };
+        let log = live_log(&connection(), &opts).unwrap();
         assert!(!log.args.iter().any(|a| a == "--max-messages"));
         assert!(!log.args.iter().any(|a| a == "--timeout-ms"));
     }

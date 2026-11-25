@@ -68,13 +68,23 @@ capabilities at its scripts.
 
 - Unlimited profiles in `host::storage` (`kafka:profiles`): id, name,
   bootstrap servers (`host:port[,host:port]`, validated), security protocol,
-  SASL mechanism, username, TLS paths, client properties file and extra
-  properties. Multiple environments coexist; the active one is in
-  `kafka:active`.
+  SASL mechanism, username, TLS paths, client properties file, inline JAAS
+  config and extra properties. Multiple environments coexist; the active one
+  is in `kafka:active`.
 - Security: `PLAINTEXT`, `SSL`, `SASL_PLAINTEXT`, `SASL_SSL` with `PLAIN`,
-  `SCRAM-SHA-256` or `SCRAM-SHA-512`. TLS: CA/certificate/key (PEM, for
-  `kcat`) and truststore/keystore (JKS, for the Java tools), forwarded as
-  client properties (`--command-property` / `-X`).
+  `SCRAM-SHA-256` or `SCRAM-SHA-512`. The **Security protocol** and **SASL
+  mechanism** chosen in the form are forwarded to the Java scripts as
+  `--command-property` (plus `-X` for `kcat`). TLS: CA/certificate/key (PEM,
+  for `kcat`) and truststore/keystore (JKS, for the Java tools), forwarded as
+  client properties.
+- **Credentials for SASL**: either point **Client properties file** at your
+  own `.properties` file (recommended), or paste the whole `sasl.jaas.config`
+  into **SASL JAAS config (inline, dev only)**. The inline value is written to
+  an owner-only file in the plugin's private directory and only that path is
+  passed to the scripts — it never appears in `argv` or in process output.
+  Multiline JAAS is folded into one properties line and backslashes are
+  escaped. If both are filled, the explicit file takes precedence.
+  The inline value is stored in plain text with the profile: development only.
 - **"Test and Save" runs `kafka-topics.sh --list` before persisting** — if the
   cluster does not answer, nothing is stored. There is also a standalone
   **Kafka: Test Connection** command.
@@ -134,12 +144,16 @@ capabilities at its scripts.
   **Connections** (form), **Brokers**, **Consumer Groups** and **Kafka CLI**
   (installation). All have a **Refresh** button; `on-schedule:60` plus the
   `autoRefresh` setting reload metadata automatically.
-- Connection/auth/ACL/timeout errors are classified into clear messages; all
-  process output is passed through `config::redact` before being shown.
-- **Secrets**: there is no password field, the user's `.properties` file is
-  referenced by path only (never read), properties containing
-  `password`/`secret`/`token`/`jaas` are rejected, and secrets never enter
-  `argv`, storage or logs.
+- Connection/auth/ACL/timeout errors are classified into clear messages. A
+  failed Kafka connection is not silently reported as an empty topic list:
+  `test_connection` checks the process exit status and stderr, and errors are
+  shown with **Test Connection** / **Test and Save**. All process output is
+  passed through `config::redact` before being shown.
+- **Secrets**: the user's `.properties` file is referenced by path only
+  (never read); sensitive keys (`password`/`secret`/`token`/`jaas`) are
+  rejected in **Extra properties**; process output is redacted and secrets
+  never enter `argv`. The optional inline JAAS field is for development: its
+  value is stored in plain text with the connection.
 - Status-bar item and *Tools* menu entries.
 
 ---
