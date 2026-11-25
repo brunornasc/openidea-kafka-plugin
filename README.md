@@ -44,7 +44,10 @@ OpenIDEA (WASM) --host::run_process--> kafka-topics.sh / console-consumer.sh / â
    `net:downloads.apache.org` capability is granted, otherwise the built-in
    list 4.4.0 â†’ 3.6.2), downloads `kafka_2.13-<version>.tgz` with `curl` and
    extracts it with `tar` into the plugin's private directory
-   (`host::fs::plugin_dir()`). A host call lasts at most 60 s and the tarball is
+   (`host::fs::plugin_dir()`). The download tries the fast `dlcdn.apache.org`
+   CDN first, then `downloads.apache.org` and `archive.apache.org` for older
+   releases; a configured `downloadUrl` replaces that list. A host call lasts
+   at most 60 s and the tarball is
    ~130 MB: each call runs four `curl` chunks of 10 s that resume with `-C -`.
    The size and percentage (`Downloaded 42 MB of 129 MB (32%)`) are persisted,
    shown in the status bar and refreshed in the Install view on every tick, so
@@ -324,8 +327,10 @@ format when reading text published by this plugin.
 - `kcat` is optional and not downloaded by the installer (no official
   prebuilt binary): install it with your OS package manager.
 - The installer uses the Apache HTTPS index when permitted; offline it falls
-  back to the built-in catalog. `downloadUrl` is configurable (including
-  `https://archive.apache.org/dist/kafka/` for older releases).
+  back to the built-in catalog. Downloads prefer `https://dlcdn.apache.org/`,
+  falling back to `https://downloads.apache.org/` and
+  `https://archive.apache.org/dist/kafka/` for older releases. `downloadUrl`
+  is configurable for private mirrors.
 
 ## Build and install
 

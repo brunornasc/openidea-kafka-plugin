@@ -795,12 +795,34 @@ pub fn kafka_version() -> String {
     setting_str("kafkaVersion", "4.1.2")
 }
 
+/// Fontes em ordem de preferência. O CDN atual costuma ser muito mais rápido
+/// que `downloads.apache.org`; as duas últimas cobrem versões antigas, que saem
+/// do CDN quando deixam de ser correntes.
+const DOWNLOAD_TEMPLATES: [&str; 3] = [
+    "https://dlcdn.apache.org/kafka/{version}/kafka_2.13-{version}.tgz",
+    "https://downloads.apache.org/kafka/{version}/kafka_2.13-{version}.tgz",
+    "https://archive.apache.org/dist/kafka/{version}/kafka_2.13-{version}.tgz",
+];
+
+/// URLs candidatos para a versão. Um `downloadUrl` configurado tem prioridade
+/// e substitui a lista inteira (para mirrors privados, por exemplo).
+pub fn download_urls(version: &str) -> Vec<String> {
+    match host::setting_string("downloadUrl") {
+        Some(template) if !template.trim().is_empty() => {
+            vec![template.replace("{version}", version)]
+        }
+        _ => DOWNLOAD_TEMPLATES
+            .iter()
+            .map(|template| template.replace("{version}", version))
+            .collect(),
+    }
+}
+
 pub fn download_url(version: &str) -> String {
-    setting_str(
-        "downloadUrl",
-        "https://downloads.apache.org/kafka/{version}/kafka_2.13-{version}.tgz",
-    )
-    .replace("{version}", version)
+    download_urls(version)
+        .into_iter()
+        .next()
+        .unwrap_or_else(|| DOWNLOAD_TEMPLATES[0].replace("{version}", version))
 }
 
 pub fn cli_flavour() -> String {
@@ -810,6 +832,20 @@ pub fn cli_flavour() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn download_sources_prefer_the_fast_cdn_and_fall_back() {
+        let host = crate::mock_host();
+        let urls = download_urls("3.6.2");
+        assert!(urls[0].contains("dlcdn.apache.org/kafka/3.6.2"));
+        assert!(urls[1].contains("downloads.apache.org/kafka/3.6.2"));
+        assert!(urls[2].contains("archive.apache.org/dist/kafka/3.6.2"));
+        host.set_setting("downloadUrl", r#""https://mirror.example/{version}.tgz""#);
+        assert_eq!(
+            download_urls("4.4.0"),
+            vec!["https://mirror.example/4.4.0.tgz"]
+        );
+    }
 
     #[test]
     fn download_progress_is_persisted_between_ticks() {

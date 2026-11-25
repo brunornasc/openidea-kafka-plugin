@@ -1188,48 +1188,80 @@ fn clear_download() {
 /// Uma chamada do host dura no máximo 60 s. Em vez de um único curl longo,
 /// fazemos quatro trechos de 10 s e reportamos o tamanho do arquivo após cada
 /// um. `-C -` retoma o parcial; `Incomplete` não é erro, o agendador continua.
+/// Se uma fonte falhar de imediato (404, DNS, capacidade não concedida),
+/// tentamos a próxima sem desperdiçar os quatro trechos nela.
 fn download_step(version: &str, tarball: &str, task: &host::Task) -> Result<DownloadStep, Error> {
     task.report(
         1,
         Some(3),
         Some(&i18n::t("Downloading the Apache Kafka tarball")),
     );
-    let url = config::download_url(version);
-    let total = remote_size(&url);
-    report_download(task, tarball, total);
+    let mut last_error: Option<String> = None;
 
-    for _ in 0..4 {
-        let mut args = strings(&["-fL", "--connect-timeout", "20", "--max-time", "10"]);
-        if host::fs::stat(tarball).is_ok() {
-            args.extend(strings(&["-C", "-"]));
-        }
-        args.extend(strings(&["-o", tarball, &url]));
-        let out = raw(CURL, &args, None).map_err(friendly)?;
-        if task.is_cancelled() {
-            return Err(Error::Cancelled);
-        }
+    for url in config::download_urls(version) {
+        let total = remote_size(&url);
         report_download(task, tarball, total);
-        match out.status {
-            Some(0) => return Ok(DownloadStep::Complete),
-            // 18: parcial; 28: `--max-time`; 56: rede caiu. Tentamos de novo
-            // nesta mesma chamada, retomando o que já foi escrito.
-            Some(18) | Some(28) | Some(56) => continue,
-            _ => {
-                let detail = config::redact(&format!("{}\n{}", out.stdout, out.stderr))
-                    .lines()
-                    .filter(|l| !l.trim().is_empty())
-                    .take(4)
-                    .collect::<Vec<_>>()
-                    .join(" | ");
-                return Err(i18n::tf(
-                    "Could not download {url}: {detail}. Check kafkaVersion and downloadUrl.",
-                    &[("url", &url), ("detail", &clip(&detail, 400))],
-                )
-                .into());
+        let mut try_next_source = false;
+
+        for _ in 0..4 {
+            let mut args = strings(&["-fL", "--connect-timeout", "20", "--max-time", "10"]);
+            if host::fs::stat(tarball).is_ok() {
+                args.extend(strings(&["-C", "-"]));
+            }
+            args.extend(strings(&["-o", tarball, &url]));
+            let out = match raw(CURL, &args, None) {
+                Ok(out) => out,
+                Err(Error::Cancelled) => return Err(Error::Cancelled),
+                Err(e) => {
+                    last_error = Some(friendly(e).to_string());
+                    try_next_source = true;
+                    break;
+                }
+            };
+            if task.is_cancelled() {
+                return Err(Error::Cancelled);
+            }
+            report_download(task, tarball, total);
+            match out.status {
+                Some(0) => return Ok(DownloadStep::Complete),
+                // 18: parcial; 28: `--max-time`; 56: rede caiu. Tentamos de novo
+                // nesta mesma chamada, retomando o que já foi escrito.
+                Some(18) | Some(28) | Some(56) => continue,
+                status => {
+                    let detail = config::redact(&format!("{}\n{}", out.stdout, out.stderr))
+                        .lines()
+                        .filter(|l| !l.trim().is_empty())
+                        .take(4)
+                        .collect::<Vec<_>>()
+                        .join(" | ");
+                    let code = match status {
+                        Some(code) => code.to_string(),
+                        None => "no exit code".into(),
+                    };
+                    last_error = Some(i18n::tf(
+                        "Could not download {url}: curl exit {code}: {detail}. Check kafkaVersion and downloadUrl.",
+                        &[
+                            ("url", &url),
+                            ("code", &code),
+                            ("detail", &clip(&detail, 400)),
+                        ],
+                    ));
+                    try_next_source = true;
+                    break;
+                }
             }
         }
+
+        if !try_next_source {
+            // Quatro trechos terminados por tempo ainda deixaram o arquivo
+            // crescendo: a próxima chamada retoma de onde parou.
+            return Ok(DownloadStep::Incomplete);
+        }
     }
-    Ok(DownloadStep::Incomplete)
+
+    Err(last_error
+        .unwrap_or_else(|| i18n::t("Could not download the Kafka tarball."))
+        .into())
 }
 
 fn verify_install(
@@ -1914,6 +1946,42 @@ mod tests {
                 .iter()
                 .any(|(_, _, msg)| msg.as_deref().map_or(false, |m| m.contains("Downloaded"))),
             "the task must report download progress"
+        );
+    }
+
+    #[test]
+    fn an_unavailable_cdn_falls_back_to_the_next_source() {
+        let host = crate::mock_host();
+        let dir = host::fs::plugin_dir().unwrap();
+        host.add_external_file(
+            &format!("{dir}/kafka_2.13-3.6.2/bin/kafka-topics.sh"),
+            "#!/bin/sh\n",
+        );
+        host.on_process(CURL, |args, _| {
+            if args.contains(&"-I".to_owned()) {
+                return ok("");
+            }
+            if args.iter().any(|a| a.contains("dlcdn.apache.org")) {
+                return Ok(ProcessOutput {
+                    status: Some(22),
+                    stdout: String::new(),
+                    stderr: "HTTP 404".into(),
+                });
+            }
+            ok("")
+        });
+        host.on_process(TAR, |_, _| ok(""));
+
+        let info = install("3.6.2", true).unwrap().unwrap();
+        assert_eq!(info.version, "3.6.2");
+        let runs = host.process_runs();
+        assert!(
+            runs.iter()
+                .any(|r| r.args.iter().any(|a| a.contains("dlcdn.apache.org")))
+        );
+        assert!(
+            runs.iter()
+                .any(|r| r.args.iter().any(|a| a.contains("downloads.apache.org")))
         );
     }
 

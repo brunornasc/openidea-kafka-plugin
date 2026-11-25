@@ -349,5 +349,7 @@
   "Clear Log": "Limpar log",
   "Command log cleared.": "Log de comandos limpo.",
   "Most recent first. Credentials and secrets are redacted.": "Mais recente primeiro. Credenciais e segredos são ocultados.",
-  "No commands yet.": "Nenhum comando ainda."
+  "No commands yet.": "Nenhum comando ainda.",
+  "Could not download {url}: curl exit {code}: {detail}. Check kafkaVersion and downloadUrl.": "Não foi possível baixar {url}: curl saiu com {code}: {detail}. Verifique kafkaVersion e downloadUrl.",
+  "Could not download the Kafka tarball.": "Não foi possível baixar o tarball do Kafka."
 }

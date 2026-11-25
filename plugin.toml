@@ -45,6 +45,7 @@ optional = [
   "process:kafka-metadata-quorum.sh",
   "process:kafka-run-class.sh",
   "process:kcat",
+  "net:dlcdn.apache.org",
   "net:downloads.apache.org",
   "net:archive.apache.org",
   "clipboard",

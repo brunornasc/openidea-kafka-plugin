@@ -14,7 +14,7 @@
     "downloadUrl": {
       "type": "string",
       "title": "Tarball URL template ({version} is substituted)",
-      "default": "https://downloads.apache.org/kafka/{version}/kafka_2.13-{version}.tgz"
+      "default": "https://dlcdn.apache.org/kafka/{version}/kafka_2.13-{version}.tgz"
     },
     "cliFlavour": {
       "type": "string",

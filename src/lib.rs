@@ -2123,6 +2123,7 @@ pub(crate) fn mock_host() -> openidea_plugin::mock::MockHost {
         "events",
         "clipboard",
         "secrets",
+        "net:dlcdn.apache.org",
         "net:downloads.apache.org",
         "net:archive.apache.org",
         "fs.read:/",
