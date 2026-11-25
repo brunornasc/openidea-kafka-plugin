@@ -18,6 +18,7 @@ activation = [
   "on-view:brokers",
   "on-view:groups",
   "on-view:install",
+  "on-view:log",
   "on-schedule:60",
 ]
 
@@ -47,6 +48,7 @@ optional = [
   "net:downloads.apache.org",
   "net:archive.apache.org",
   "clipboard",
+  "fs.read:~",
 ]
 
 [[contributes.views]]
@@ -90,6 +92,12 @@ group = "kafka"
 [[contributes.views]]
 id = "install"
 title = "Kafka CLI"
+location = "bottom"
+group = "kafka"
+
+[[contributes.views]]
+id = "log"
+title = "Kafka Log"
 location = "bottom"
 group = "kafka"
 
@@ -233,6 +241,16 @@ id = "group-lag"
 title = "Kafka: Group Offsets and Lag"
 category = "Kafka"
 
+[[contributes.commands]]
+id = "log"
+title = "Kafka: Command Log"
+category = "Kafka"
+
+[[contributes.commands]]
+id = "clear-log"
+title = "Kafka: Clear Command Log"
+category = "Kafka"
+
 [[contributes.menus]]
 menu = "tools"
 command = "open"
@@ -244,6 +262,10 @@ command = "install-backend"
 [[contributes.menus]]
 menu = "tools"
 command = "install-from-file"
+
+[[contributes.menus]]
+menu = "tools"
+command = "log"
 
 [[contributes.statusBar]]
 id = "kafka"

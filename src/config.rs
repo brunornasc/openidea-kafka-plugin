@@ -20,6 +20,7 @@ pub const INSTALL_KEY: &str = "kafka:install";
 pub const PENDING_INSTALL_KEY: &str = "kafka:pending-install";
 pub const PREFS_KEY: &str = "kafka:prefs";
 pub const FORMATS_KEY: &str = "kafka:formats";
+pub const LOG_KEY: &str = "kafka:command-log";
 
 pub const SECURITY_PROTOCOLS: [&str; 4] = ["PLAINTEXT", "SSL", "SASL_PLAINTEXT", "SASL_SSL"];
 pub const SASL_MECHANISMS: [&str; 4] = ["", "PLAIN", "SCRAM-SHA-256", "SCRAM-SHA-512"];
@@ -427,10 +428,15 @@ pub fn set_install_info(info: &InstallInfo) -> Result<(), Error> {
 
 /// Download interrompido pelo limite de tempo de uma chamada: continua nos
 /// eventos agendados, retomando o arquivo com `curl -C -`.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct PendingInstall {
     pub version: String,
     pub tarball: String,
+    /// Bytes já escritos e tamanho remoto, persistidos para que a view e a
+    /// barra de status mostrem progresso mesmo entre duas chamadas do host.
+    pub done: u64,
+    pub total: Option<u64>,
 }
 
 pub fn pending_install() -> Option<PendingInstall> {
@@ -438,19 +444,116 @@ pub fn pending_install() -> Option<PendingInstall> {
     serde_json::from_str(&raw).ok()
 }
 
-pub fn set_pending_install(version: &str, tarball: &str) -> Result<(), Error> {
-    let pending = PendingInstall {
-        version: version.into(),
-        tarball: tarball.into(),
-    };
+fn write_pending(pending: &PendingInstall) -> Result<(), Error> {
     host::storage::set(
         PENDING_INSTALL_KEY,
-        &serde_json::to_string(&pending).map_err(|e| e.to_string())?,
+        &serde_json::to_string(pending).map_err(|e| e.to_string())?,
     )
+}
+
+pub fn set_pending_install(version: &str, tarball: &str) -> Result<(), Error> {
+    write_pending(&PendingInstall {
+        version: version.into(),
+        tarball: tarball.into(),
+        ..PendingInstall::default()
+    })
+}
+
+pub fn update_pending_progress(done: u64, total: Option<u64>) {
+    let Some(mut pending) = pending_install() else {
+        return;
+    };
+    pending.done = done;
+    pending.total = total;
+    let _ = write_pending(&pending);
+}
+
+pub fn download_progress(pending: &PendingInstall) -> String {
+    let mb = |bytes: u64| (bytes / 1_048_576).to_string();
+    match pending.total {
+        Some(total) if total > 0 => {
+            let percent = (pending.done * 100 / total).min(100);
+            i18n::tf(
+                "Downloaded {done} MB of {total} MB ({percent}%)",
+                &[
+                    ("done", &mb(pending.done)),
+                    ("total", &mb(total)),
+                    ("percent", &percent.to_string()),
+                ],
+            )
+        }
+        _ => i18n::tf("Downloaded {done} MB", &[("done", &mb(pending.done))]),
+    }
 }
 
 pub fn clear_pending_install() {
     let _ = host::storage::delete(PENDING_INSTALL_KEY);
+}
+
+/// Uma linha do log: comando executado, resultado e saída do processo.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct CommandLogEntry {
+    pub command: String,
+    pub status: String,
+    pub response: String,
+}
+
+impl Default for CommandLogEntry {
+    fn default() -> Self {
+        Self {
+            command: String::new(),
+            status: String::new(),
+            response: String::new(),
+        }
+    }
+}
+
+const LOG_LIMIT: usize = 80;
+
+pub fn append_log(entry: CommandLogEntry) {
+    let mut entry = entry;
+    entry.command = entry.command.chars().take(240).collect();
+    entry.status = entry.status.chars().take(300).collect();
+    entry.response = entry.response.chars().take(800).collect();
+    let mut entries = load_log();
+    entries.insert(0, entry);
+    entries.truncate(LOG_LIMIT);
+    let _ = host::storage::set(
+        LOG_KEY,
+        &serde_json::to_string(&entries).unwrap_or_else(|_| "[]".into()),
+    );
+}
+
+pub fn load_log() -> Vec<CommandLogEntry> {
+    let Ok(Some(raw)) = host::storage::get(LOG_KEY) else {
+        return Vec::new();
+    };
+    serde_json::from_str(&raw).unwrap_or_default()
+}
+
+pub fn clear_log() {
+    let _ = host::storage::delete(LOG_KEY);
+}
+
+/// `command > status (resposta)`, com a entrada mais recente primeiro.
+pub fn log_text() -> String {
+    let entries = load_log();
+    if entries.is_empty() {
+        return i18n::t("No commands yet.");
+    }
+    entries
+        .iter()
+        .map(|e| {
+            let response = e.response.trim();
+            if response.is_empty() {
+                format!("{}\n> {}", e.command, e.status)
+            } else {
+                format!("{}\n> {}\n  {}", e.command, e.status, response)
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n\n")
 }
 
 /// Preferências do visualizador de mensagens.
@@ -707,6 +810,38 @@ pub fn cli_flavour() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn download_progress_is_persisted_between_ticks() {
+        let _host = crate::mock_host();
+        set_pending_install("4.4.0", "/tmp/kafka.tgz").unwrap();
+        update_pending_progress(42 * 1_048_576, Some(129 * 1_048_576));
+        let pending = pending_install().unwrap();
+        assert_eq!(pending.done, 42 * 1_048_576);
+        assert!(download_progress(&pending).contains("32%"));
+        clear_pending_install();
+        assert_eq!(pending_install(), None);
+    }
+
+    #[test]
+    fn command_log_keeps_the_most_recent_first() {
+        let _host = crate::mock_host();
+        append_log(CommandLogEntry {
+            command: "topics".into(),
+            status: "OK".into(),
+            response: "orders".into(),
+        });
+        append_log(CommandLogEntry {
+            command: "publish".into(),
+            status: "ERROR".into(),
+            response: "boom".into(),
+        });
+        let text = log_text();
+        assert!(text.starts_with("publish\n> ERROR\n  boom"));
+        assert!(text.contains("topics\n> OK\n  orders"));
+        clear_log();
+        assert_eq!(log_text(), "No commands yet.");
+    }
 
     #[test]
     fn bootstrap_servers_are_validated() {

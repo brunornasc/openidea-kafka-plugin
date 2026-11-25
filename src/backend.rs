@@ -20,7 +20,7 @@ use crate::model::{
     QuorumInfo, RECORD_SEP, Topic,
 };
 use openidea_plugin::details::ProcessLog;
-use openidea_plugin::{Error, HttpRequest, LogLevel, ProcessOutput, host};
+use openidea_plugin::{Error, HttpRequest, LogLevel, ProcessOutput, StatusItem, host};
 
 pub const TOPICS: &str = "kafka-topics.sh";
 pub const CONSUMER: &str = "kafka-console-consumer.sh";
@@ -34,6 +34,10 @@ pub const KCAT: &str = "kcat";
 pub const CURL: &str = "curl";
 pub const TAR: &str = "tar";
 pub const JAVA: &str = "java";
+
+/// Item da barra de status que sobrevive ao fim da chamada: o `Task` some,
+/// mas este item mostra o progresso entre os ticks agendados.
+const DOWNLOAD_STATUS: &str = "kafka-download";
 
 /// Versões conhecidas quando o catálogo online não está disponível.
 pub const BUILTIN_VERSIONS: [&str; 8] = [
@@ -118,7 +122,29 @@ fn friendly_denied(cap: &str) -> Error {
 }
 
 fn raw(program: &str, args: &[String], stdin: Option<&str>) -> Result<ProcessOutput, Error> {
-    host::run_process(program, args, stdin)
+    let result = host::run_process(program, args, stdin);
+    // Todo processo é registrado no log, inclusive as tentativas de
+    // compatibilidade (`java` primeiro, script depois). O curl é omitido: os
+    // trechos do download já aparecem no progresso da view Install.
+    if program != CURL {
+        match &result {
+            Ok(out) => {
+                let status = match out.status {
+                    Some(0) => "OK (exit 0)".into(),
+                    Some(code) => format!("ERROR (exit {code})"),
+                    None => "OK".into(),
+                };
+                record_process(
+                    program,
+                    args,
+                    &status,
+                    &format!("{}\n{}", out.stdout, out.stderr),
+                );
+            }
+            Err(e) => record_process(program, args, &e.to_string(), ""),
+        }
+    }
+    result
 }
 
 fn friendly(error: Error) -> Error {
@@ -215,6 +241,19 @@ fn unknown_option(output: &ProcessOutput) -> bool {
     ]
     .iter()
     .any(|p| text.contains(p))
+}
+
+fn record_process(program: &str, args: &[String], status: &str, response: &str) {
+    let mut command = program.to_owned();
+    if !args.is_empty() {
+        command.push(' ');
+        command.push_str(&clip(&args.join(" "), 240));
+    }
+    config::append_log(config::CommandLogEntry {
+        command,
+        status: clip(status, 300),
+        response: clip(&config::redact(response), 800),
+    });
 }
 
 fn run(program: &str, args: &[String], stdin: Option<&str>) -> Result<ProcessOutput, Error> {
@@ -1118,21 +1157,32 @@ fn remote_size(url: &str) -> Option<u64> {
 fn report_download(task: &host::Task, tarball: &str, total: Option<u64>) {
     let done = host::fs::stat(tarball)
         .map(|stat| stat.size)
-        .unwrap_or_default()
-        .min(total.unwrap_or(u64::MAX));
-    let mb = |bytes: u64| (bytes / 1_048_576).to_string();
-    let message = match total {
-        Some(total) => i18n::tf(
-            "Downloaded {done} MB of {total} MB",
-            &[("done", &mb(done)), ("total", &mb(total))],
-        ),
-        None => i18n::tf("Downloaded {done} MB", &[("done", &mb(done))]),
-    };
+        .unwrap_or_default();
+    config::update_pending_progress(done, total);
+    let message = config::download_progress(&config::PendingInstall {
+        done,
+        total,
+        ..config::PendingInstall::default()
+    });
     task.report(
-        done.min(u32::MAX as u64) as u32,
+        done.min(total.unwrap_or(u64::MAX)).min(u32::MAX as u64) as u32,
         total.map(|t| t.min(u32::MAX as u64) as u32),
         Some(&message),
     );
+    // O Task termina com a chamada; este item fica visível até a conclusão.
+    host::set_status_item(
+        DOWNLOAD_STATUS,
+        &StatusItem {
+            text: format!("Kafka: {message}"),
+            tooltip: Some(message),
+            command: Some("install".into()),
+        },
+    );
+}
+
+fn clear_download() {
+    config::clear_pending_install();
+    host::remove_status_item(DOWNLOAD_STATUS);
 }
 
 /// Uma chamada do host dura no máximo 60 s. Em vez de um único curl longo,
@@ -1202,7 +1252,7 @@ fn verify_install(
         bin: bin.into(),
     };
     config::set_install_info(&info)?;
-    config::clear_pending_install();
+    clear_download();
     Ok(info)
 }
 
@@ -1270,7 +1320,7 @@ pub fn install(version: &str, force: bool) -> Result<Option<config::InstallInfo>
             bin,
         };
         config::set_install_info(&info)?;
-        config::clear_pending_install();
+        clear_download();
         return Ok(Some(info));
     }
     let tarball = format!("{dir}/kafka_2.13-{version}.tgz");
@@ -1285,7 +1335,7 @@ pub fn install(version: &str, force: bool) -> Result<Option<config::InstallInfo>
         }
         Ok(DownloadStep::Incomplete) => Ok(None),
         Err(e) => {
-            config::clear_pending_install();
+            clear_download();
             Err(e)
         }
     }
@@ -1298,7 +1348,7 @@ pub fn resume_install() -> Result<bool, Error> {
         return Ok(false);
     };
     if !valid_version(&pending.version) {
-        config::clear_pending_install();
+        clear_download();
         return Ok(false);
     }
     let dir = host::fs::plugin_dir()?;
@@ -1315,7 +1365,7 @@ pub fn resume_install() -> Result<bool, Error> {
             bin,
         };
         config::set_install_info(&info)?;
-        config::clear_pending_install();
+        clear_download();
         return Ok(true);
     }
     let task = host::begin_task(
@@ -1332,7 +1382,7 @@ pub fn resume_install() -> Result<bool, Error> {
         }
         Ok(DownloadStep::Incomplete) => Ok(false),
         Err(e) => {
-            config::clear_pending_install();
+            clear_download();
             Err(e)
         }
     }
@@ -1516,6 +1566,10 @@ mod tests {
         });
         list_topics(&connection()).unwrap();
         assert_eq!(host.process_runs()[0].program, JAVA);
+        let text = config::log_text();
+        assert!(text.contains("java "), "{text}");
+        assert!(text.contains("> OK (exit 0)"), "{text}");
+        assert!(text.contains("  t"), "{text}");
     }
 
     #[test]

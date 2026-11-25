@@ -211,15 +211,18 @@
     else if (!topics.length) sel.value = '';
   }
 
-  function fillFormats(select, selected) {
+  function fillFormats(select, selected, deserializer) {
     select.innerHTML = '';
     const formats = state.formats && state.formats.length ? state.formats : ['StringSerializer'];
-    for (const format of formats) {
+    const labels = deserializer
+      ? (state.deserializerFormats || formats)
+      : formats;
+    formats.forEach((format, i) => {
       const option = document.createElement('option');
       option.value = format;
-      option.textContent = T(format);
+      option.textContent = T(labels[i] || format);
       select.appendChild(option);
-    }
+    });
     select.value = formats.indexOf(selected) >= 0 ? selected : 'StringSerializer';
   }
 
@@ -229,8 +232,8 @@
     const p = state.prefs || {};
     fillTopics(p.topic || $('topic').value);
     const chosen = (state.topicFormats || {})[p.topic || $('topic').value] || {};
-    fillFormats($('format'), chosen.deserializer || 'StringSerializer');
-    fillFormats($('pubFormat'), chosen.serializer || 'StringSerializer');
+    fillFormats($('format'), chosen.deserializer || 'StringSerializer', true);
+    fillFormats($('pubFormat'), chosen.serializer || 'StringSerializer', false);
     $('partition').value = p.partition || '';
     $('start').value = p.start || 'end';
     $('offset').value = p.offset || '';

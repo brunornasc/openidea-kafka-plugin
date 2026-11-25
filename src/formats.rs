@@ -32,6 +32,18 @@ pub fn normalize(value: &str) -> String {
     if let Some(found) = NAMES.iter().find(|name| name.eq_ignore_ascii_case(value)) {
         return (*found).into();
     }
+    // O seletor de consumo mostra `ByteArrayDeserializer`, mas o valor guardado
+    // é sempre o token `ByteArraySerializer`: a classe de deserialização é
+    // derivada dele. Aceitar os dois evita confundir a pessoa e o storage.
+    if let Some(short) = value.strip_suffix("Deserializer") {
+        let canonical = format!("{short}Serializer");
+        if let Some(found) = NAMES
+            .iter()
+            .find(|name| name.eq_ignore_ascii_case(&canonical))
+        {
+            return (*found).into();
+        }
+    }
     let short = value.rsplit('.').next().unwrap_or(value);
     if let Some(found) = NAMES.iter().find(|name| name.eq_ignore_ascii_case(short)) {
         return (*found).into();
@@ -105,6 +117,16 @@ pub fn deserializer_class(format: &str) -> &'static str {
     class(format, "Deserializer")
 }
 
+/// Nome amigável exibido no seletor/coluna de deserialização. O valor salvo
+/// continua sendo o token `…Serializer`, mas a pessoa vê `…Deserializer`.
+pub fn deserializer_name(format: &str) -> String {
+    let format = normalize(format);
+    format
+        .strip_suffix("Serializer")
+        .map(|short| format!("{short}Deserializer"))
+        .unwrap_or(format)
+}
+
 /// Avro and Protobuf need Confluent jars and a schema registry. Make that
 /// explicit instead of letting the JVM fail with a bare ClassNotFoundException.
 pub fn requires_schema_registry(format: &str) -> bool {
@@ -136,6 +158,16 @@ pub fn serialize_text(format: &str, text: &str) -> Result<String, Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn deserializer_names_normalize_to_the_saved_token() {
+        let _host = crate::mock_host();
+        assert_eq!(normalize("ByteArrayDeserializer"), "ByteArraySerializer");
+        assert_eq!(
+            deserializer_name("ByteArraySerializer"),
+            "ByteArrayDeserializer"
+        );
+    }
 
     #[test]
     fn every_offered_format_has_a_class_pair() {

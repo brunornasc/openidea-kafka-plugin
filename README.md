@@ -45,18 +45,20 @@ OpenIDEA (WASM) --host::run_process--> kafka-topics.sh / console-consumer.sh / �
    list 4.4.0 → 3.6.2), downloads `kafka_2.13-<version>.tgz` with `curl` and
    extracts it with `tar` into the plugin's private directory
    (`host::fs::plugin_dir()`). A host call lasts at most 60 s and the tarball is
-   ~130 MB: each call runs four `curl` chunks of 10 s that resume with `-C -`,
-   reporting the downloaded size (`Downloaded 42 MB of 129 MB`) in the status
-   bar. When a call ends before the file is complete, the download continues
-   automatically on the next scheduled tick; the Install view shows a
-   "resuming automatically" row while it is in progress.
+   ~130 MB: each call runs four `curl` chunks of 10 s that resume with `-C -`.
+   The size and percentage (`Downloaded 42 MB of 129 MB (32%)`) are persisted,
+   shown in the status bar and refreshed in the Install view on every tick, so
+   it stays visible even after the call ends. When a call ends before the file
+   is complete, the download continues automatically on the next scheduled
+   tick.
  2. If you already have `kafka_2.13-<version>.tgz` on your machine (for example
    from a previous download), use **Kafka: Install CLI from a Local Tarball**
-   (or the **Install from Local File** button in the Install view). Pick the
-   absolute path to the `.tgz` and the plugin extracts it directly with `tar`.
+   (or the **Install from Local File** button in the Install view). A folder
+   dialog opens, the `.tgz` files in it are listed for you to pick; grant the
+   optional `fs.read:~` capability to enable the listing. Without that grant,
+   the chosen folder is prefilled in a text field so you only type the filename.
    The version is inferred from `kafka_2.13-<version>.tgz` (otherwise the
-   configured `kafkaVersion` is used) — no re-download and no `fs.read`
-   capability needed. `~/` is not expanded: use the full path.
+   configured `kafkaVersion` is used). `~/` is not expanded in the typed path.
  3. The installed distribution is launched directly as
     `java -cp <plugin-dir>/kafka_2.13-<version>/libs/* <MainClass> …`, so no
     `process:*.sh` grant is needed and scripts approved before installation do
@@ -166,9 +168,15 @@ and point the optional script capabilities at its `bin/` scripts.
 
 - Tool windows: **Kafka** (tree explorer with a detail pane and tabs for
   partitions/configurations/live messages), **Topics**, **Messages**,
-  **Connections** (form), **Brokers**, **Consumer Groups** and **Kafka CLI**
-  (installation). All have a **Refresh** button; `on-schedule:60` plus the
-  `autoRefresh` setting reload metadata automatically.
+  **Connections** (form), **Brokers**, **Consumer Groups**, **Kafka CLI**
+  (installation) and **Kafka Log**. All have a **Refresh** button;
+  `on-schedule:60` plus the `autoRefresh` setting reload metadata
+  automatically.
+- **Kafka Log** (also a **Log** tab in the explorer's detail pane) keeps the
+  last 80 entries as `command > status (response)`, most recent first. Every
+  Kafka/java process and every plugin command is recorded with its exit status
+  and redacted terminal output, so the last action's success or failure is
+  visible after the status chip changes. **Clear Log** empties the history.
 - Connection/auth/ACL/timeout errors are classified into clear messages. A
   failed Kafka connection is not silently reported as an empty topic list:
   `test_connection` checks the process exit status and stderr, and errors are
@@ -259,9 +267,11 @@ publishing. The options mirror Kafka serializer class names:
 `StringSerializer` (default), `ByteArraySerializer`, `IntegerSerializer`,
 `LongSerializer`, `DoubleSerializer`, `FloatSerializer`, `BytesSerializer`,
 `ByteBufferSerializer`, `VoidSerializer`, `JsonSerializer`,
-`KafkaAvroSerializer` and `KafkaProtobufSerializer`. The choice is saved per
-topic and shown in the **Serializer** and **Deserializer** columns of the
-Topics view, so switching topics restores what was used for each one.
+`KafkaAvroSerializer` and `KafkaProtobufSerializer`. The consume combobox shows
+the matching `…Deserializer` names (for example `ByteArrayDeserializer`) while
+the saved value stays the canonical `…Serializer` token; the Topics view shows
+each column with the correct suffix. The choice is saved per topic, so
+switching topics restores what was used for each one.
 
 - On consume, the format selects the deserializer passed to
   `--formatter-property`: the `Serializer` suffix becomes `Deserializer` and

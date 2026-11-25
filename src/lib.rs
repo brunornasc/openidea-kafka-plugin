@@ -38,7 +38,8 @@ const BROKERS: &str = "brokers";
 const GROUPS: &str = "groups";
 const INSTALL: &str = "install";
 const INSTALL_FILE: &str = "install-from-file";
-const ALL_VIEWS: [&str; 7] = [
+const LOG: &str = "log";
+const ALL_VIEWS: [&str; 8] = [
     EXPLORER,
     TOPICS,
     MESSAGES,
@@ -46,6 +47,7 @@ const ALL_VIEWS: [&str; 7] = [
     BROKERS,
     GROUPS,
     INSTALL,
+    LOG,
 ];
 const PAGE: &str = include_str!("page.html");
 /// The status-bar contribution declared in `plugin.toml`; the plugin replaces
@@ -187,13 +189,20 @@ impl Kafka {
 
     /// Persistent feedback in the status bar. Notifications can be hidden by
     /// the IDE; the chip stays until the next command.
-    fn report_result(&mut self, result: &Result<Option<String>, Error>) {
-        let (mark, tooltip, show_in_view) = match result {
-            Ok(Some(text)) => ("✓", text.clone(), true),
-            Ok(None) => ("•", i18n::t("Kafka ready."), false),
-            Err(Error::Cancelled) => ("•", i18n::t("Kafka: cancelled."), true),
-            Err(e) => ("✗", e.to_string(), true),
+    fn report_result(&mut self, id: &str, result: &Result<Option<String>, Error>) {
+        let (mark, tooltip, show_in_view, status) = match result {
+            Ok(Some(text)) => ("✓", text.clone(), true, "OK".into()),
+            Ok(None) => ("•", i18n::t("Kafka ready."), false, String::new()),
+            Err(Error::Cancelled) => ("•", i18n::t("Kafka: cancelled."), true, "CANCELLED".into()),
+            Err(e) => ("✗", e.to_string(), true, "ERROR".into()),
         };
+        if !status.is_empty() {
+            config::append_log(config::CommandLogEntry {
+                command: id.into(),
+                status,
+                response: tooltip.clone(),
+            });
+        }
         host::set_status_item(
             STATUS_ID,
             &StatusItem {
@@ -216,7 +225,7 @@ impl Kafka {
         arg: Option<&str>,
     ) -> Result<Option<String>, Error> {
         let result = self.command(id, ctx, arg);
-        self.report_result(&result);
+        self.report_result(id, &result);
         result
     }
 
@@ -289,6 +298,12 @@ impl Kafka {
         value["active"] = json!(config::active_id());
         value["topics"] = json!(self.topic_names);
         value["formats"] = json!(formats::NAMES);
+        value["deserializerFormats"] = json!(
+            formats::NAMES
+                .iter()
+                .map(|f| formats::deserializer_name(f))
+                .collect::<Vec<_>>()
+        );
         value["topicFormats"] = json!(config::load_formats());
         value["installed"] = json!(config::install_info().map(|i| i.bin));
         // The IDE does not translate HTML bodies: ship the same catalog the
@@ -460,7 +475,7 @@ impl Kafka {
                 Ok(Some(text))
             }
             INSTALL_FILE => {
-                let source = ask(&i18n::t("Kafka: local tarball to install"), None)?;
+                let source = choose_local_tarball()?;
                 let version = if let Some(v) = arg.filter(|s| !s.is_empty()) {
                     v.to_owned()
                 } else {
@@ -484,6 +499,15 @@ impl Kafka {
                 self.backend = Some(backend::check_backend());
                 host::refresh_view(INSTALL);
                 Ok(Some(backend_status_text(self.backend.as_ref().unwrap())))
+            }
+            "log" => {
+                host::reveal_view(LOG)?;
+                Ok(None)
+            }
+            "clear-log" => {
+                config::clear_log();
+                Self::refresh_all();
+                Ok(Some(i18n::t("Command log cleared.")))
             }
             "topics" => {
                 let _ = self.reload();
@@ -794,7 +818,7 @@ impl Plugin for Kafka {
         // a ativação — a view explica como instalar.
         let _ = self.reload();
         let ready: Result<Option<String>, Error> = Ok(None);
-        self.report_result(&ready);
+        self.report_result("activate", &ready);
         Ok(())
     }
 
@@ -826,7 +850,11 @@ impl Plugin for Kafka {
                     self.backend = Some(backend::check_backend());
                     Self::refresh_all();
                 }
-                Ok(false) => {}
+                Ok(false) => {
+                    if config::pending_install().is_some() {
+                        host::refresh_view(INSTALL);
+                    }
+                }
                 Err(_) => Self::refresh_all(),
             }
             // Enquanto baixa, não gasta o orçamento da chamada com `reload`.
@@ -855,6 +883,7 @@ impl Views for Kafka {
             BROKERS => Ok(self.render_brokers()),
             GROUPS => Ok(self.render_groups(viewport)),
             INSTALL => Ok(self.render_install()),
+            LOG => Ok(self.render_log()),
             _ => Err(Error::NotFound(view.into())),
         }
     }
@@ -868,6 +897,7 @@ impl Views for Kafka {
             BROKERS => self.handle_simple(&event, ctx, BROKERS),
             GROUPS => self.handle_groups(event, ctx),
             INSTALL => self.handle_simple(&event, ctx, INSTALL),
+            LOG => self.handle_simple(&event, ctx, LOG),
             _ => Err(Error::NotFound(view.into())),
         }
     }
@@ -1075,7 +1105,7 @@ impl Kafka {
                         .collect::<Vec<_>>()
                         .join(", "),
                     chosen.serializer,
-                    chosen.deserializer,
+                    formats::deserializer_name(&chosen.deserializer),
                 ]
             })
             .collect();
@@ -1474,11 +1504,16 @@ impl Kafka {
                 i18n::t("Use 'Download and install'"),
             ]);
         }
-        if let Some(pending) = config::pending_install() {
+        let pending = config::pending_install();
+        if let Some(pending) = &pending {
             rows.push(vec![
                 i18n::t("Download"),
                 i18n::tf("Apache Kafka {version}", &[("version", &pending.version)]),
-                i18n::t("resuming automatically"),
+                format!(
+                    "{} · {}",
+                    config::download_progress(pending),
+                    i18n::t("resuming automatically")
+                ),
             ]);
         }
         if let Some(status) = &self.backend {
@@ -1525,10 +1560,16 @@ impl Kafka {
                 "Download the official distribution and point the process:* capabilities to the extracted scripts.",
             ),
         };
-        let hint = i18n::tf(
+        let mut hint = i18n::tf(
             "{base} Configured version: {version}. Requires Java on the PATH.",
             &[("base", &base), ("version", &config::kafka_version())],
         );
+        if pending.is_some() {
+            hint.push(' ');
+            hint.push_str(&i18n::t(
+                "The download resumes automatically every minute; this view updates on its own.",
+            ));
+        }
         View::new(Body::sortable_table(&table, None))
             .button(Button::new("install-backend", "Download and Install").icon("download"))
             .button(Button::new(INSTALL_FILE, "Install from Local File").icon("download"))
@@ -1536,6 +1577,16 @@ impl Kafka {
             .button(Button::new("check-backend", "Verify CLI").icon("settings"))
             .button(Button::new("copy-paths", "Copy Paths").icon("copy"))
             .status(&hint)
+    }
+
+    /// Histórico `comando > status (resposta do terminal)`.
+    fn render_log(&self) -> View {
+        View::message(&config::log_text())
+            .button(Button::new("log", "Refresh Log").icon("refresh"))
+            .button(Button::new("clear-log", "Clear Log").icon("trash"))
+            .status(&i18n::t(
+                "Most recent first. Credentials and secrets are redacted.",
+            ))
     }
 
     fn handle_simple(
@@ -1682,6 +1733,11 @@ impl Details for Kafka {
                 ));
             }
         }
+        tabs.push(Tab::new(
+            "log",
+            &i18n::t("Log"),
+            Pane::Text(config::log_text()),
+        ));
         Ok(tabs)
     }
 }
@@ -1704,6 +1760,34 @@ fn pick_one(title: &str, items: &[String], empty: &str) -> Result<String, Error>
     }
     let picks: Vec<PickItem> = items.iter().map(|i| PickItem::new(i, i)).collect();
     host::pick(title, &picks)?.ok_or(Error::Cancelled)
+}
+
+/// O SDK não tem um seletor de arquivo: escolhemos a pasta e listamos os
+/// `.tgz` nela. Sem a capacidade `fs.read:~`, a pasta escolhida entra como
+/// prefixo de um campo de texto, para a pessoa completar o nome do arquivo.
+fn choose_local_tarball() -> Result<String, Error> {
+    let dir = host::pick_directory(&i18n::t("Kafka: folder containing the Kafka tarball"), None)?
+        .ok_or(Error::Cancelled)?;
+    match host::fs::read_dir(&dir) {
+        Ok(entries) => {
+            let mut tarballs: Vec<String> = entries
+                .into_iter()
+                .filter(|e| {
+                    let name = e.name.to_ascii_lowercase();
+                    name.ends_with(".tgz") || name.ends_with(".tar.gz")
+                })
+                .map(|e| format!("{}/{}", dir.trim_end_matches('/'), e.name))
+                .collect();
+            tarballs.sort();
+            let empty = i18n::tf("No Kafka tarball (.tgz) in {dir}.", &[("dir", &dir)]);
+            pick_one(&i18n::t("Kafka: choose the tarball"), &tarballs, &empty)
+        }
+        Err(Error::Denied(_)) => ask(
+            &i18n::t("Kafka: local tarball to install"),
+            Some(&format!("{}/", dir.trim_end_matches('/'))),
+        ),
+        Err(e) => Err(e),
+    }
 }
 
 fn parse_configs(raw: &str) -> Result<Vec<(String, String)>, Error> {
@@ -2361,7 +2445,7 @@ mod tests {
             .find(|r| r[0].as_str() == Some("pedidos"))
             .unwrap();
         assert_eq!(row[5].as_str(), Some("ByteArraySerializer"));
-        assert_eq!(row[6].as_str(), Some("IntegerSerializer"));
+        assert_eq!(row[6].as_str(), Some("IntegerDeserializer"));
     }
 
     #[test]
@@ -2435,5 +2519,49 @@ mod tests {
         assert!(fields.iter().any(|f| f.key == "sasl_jaas_config"));
         assert!(fields.iter().any(|f| f.key == "security_protocol"));
         assert!(view.toolbar.iter().any(|b| b.id == "connection-test-draft"));
+    }
+
+    #[test]
+    fn the_log_view_shows_command_status_and_can_be_cleared() {
+        let host = host_with_cluster();
+        let mut plugin = Kafka::default();
+        plugin.activate(&host.context("brunornasc.kafka")).unwrap();
+        config::append_log(config::CommandLogEntry {
+            command: "publish".into(),
+            status: "ERROR".into(),
+            response: "not authorized".into(),
+        });
+        let view = plugin.render_log();
+        let Body::Message(text) = view.body else {
+            panic!("expected message")
+        };
+        assert!(
+            text.contains("publish\n> ERROR\n  not authorized"),
+            "{text}"
+        );
+        assert!(view.toolbar.iter().any(|b| b.id == "clear-log"));
+        plugin
+            .command("clear-log", &host.invocation(), None)
+            .unwrap();
+        assert_eq!(config::load_log().len(), 0);
+    }
+
+    #[test]
+    fn the_local_tarball_picker_falls_back_to_a_typed_path() {
+        let host = MockHost::install().with_capabilities(&["storage"]);
+        host.answer_next_prompt(Some(&["/tmp"]));
+        host.answer_next_prompt(Some(&["/tmp/kafka_2.13-4.4.0.tgz"]));
+        assert_eq!(choose_local_tarball().unwrap(), "/tmp/kafka_2.13-4.4.0.tgz");
+    }
+
+    #[test]
+    fn the_message_page_labels_deserializers_correctly() {
+        let host = host_with_cluster();
+        let mut plugin = Kafka::default();
+        plugin.activate(&host.context("brunornasc.kafka")).unwrap();
+        let state: Value = serde_json::from_str(&plugin.messages_state()).unwrap();
+        let labels = state["deserializerFormats"].as_array().unwrap();
+        assert!(labels.contains(&json!("ByteArrayDeserializer")));
+        assert!(!labels.contains(&json!("ByteArraySerializer")));
     }
 }
