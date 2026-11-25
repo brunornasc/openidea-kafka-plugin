@@ -123,6 +123,12 @@ fn raw(program: &str, args: &[String], stdin: Option<&str>) -> Result<ProcessOut
 fn friendly(error: Error) -> Error {
     match error {
         Error::Denied(cap) => friendly_denied(&cap),
+        Error::Failed(msg) if msg.starts_with(JAVA) && msg.contains("timed out") => {
+            i18n::t(
+                "Timed out talking to the cluster. Check the bootstrap servers, the network and request.timeout.ms in the client properties.",
+            )
+            .into()
+        }
         other => other,
     }
 }
@@ -278,7 +284,17 @@ fn execute(
 ) -> Result<ProcessOutput, Error> {
     let modern = build(c, tool, true, specific(true)?)?;
     let legacy = build(c, tool, false, specific(false)?)?;
-    run_compat(tool, modern, legacy, stdin)
+    // Um task mantém a chamada viva por até 60 s: a JVM + SASL costumam
+    // demorar mais que o orçamento padrão de 5 s do host.
+    let task = host::begin_task(
+        &i18n::tf("Kafka: {program}", &[("program", tool.program())]),
+        true,
+    );
+    let result = run_compat(tool, modern, legacy, stdin);
+    if task.is_cancelled() {
+        return Err(Error::Cancelled);
+    }
+    result
 }
 
 fn build(
