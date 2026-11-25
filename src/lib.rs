@@ -374,7 +374,7 @@ impl Kafka {
                     .collect::<Vec<_>>()
                     .join("\n");
                 let text = i18n::tf(
-                    "Apache Kafka {version} installed in {dir}.\n\nPoint the process:* capabilities to the scripts:\n{scripts}\n\nJava 17+ (Kafka 4.x) on the PATH is required.",
+                    "Apache Kafka {version} installed in {dir}.\n\nNow remove and re-add the process:* capabilities in Settings › Plugins › Kafka › Capabilities (OpenIDEA resolves each program when you approve it). Point them to:\n{scripts}\n\nJava 17+ (Kafka 4.x) on the PATH is required.",
                     &[
                         ("version", &version),
                         ("dir", &info.dir),
@@ -1382,7 +1382,7 @@ impl Kafka {
         };
         let base = match config::install_info() {
             Some(info) => i18n::tf(
-                "Installed in {dir}. Point the process:* capabilities to {bin}/<script>.",
+                "Installed in {dir}. If you allowed process:* before installing, remove and re-add each capability in Settings › Plugins › Kafka › Capabilities and point it to {bin}/<script>.",
                 &[("dir", &info.dir), ("bin", &info.bin)],
             ),
             None => i18n::t(

@@ -74,7 +74,7 @@ fn friendly_denied(cap: &str) -> Error {
         .into();
     }
     i18n::tf(
-        "Capability {cap} is not granted. In Settings › Plugins › Kafka › Capabilities, enable it and point the program to the script of the Apache Kafka distribution (or install the CLI with \"Kafka: Download and Install the Apache Kafka CLI\").",
+        "Capability {cap} is not granted. In Settings › Plugins › Kafka › Capabilities, enable it and point the program to the script of the Apache Kafka distribution. If you installed the CLI after allowing it, remove and re-add the capability: OpenIDEA resolves the program when the permission is granted.",
         &[("cap", cap)],
     )
     .into()
@@ -924,7 +924,7 @@ pub fn check_backend() -> BackendStatus {
                     .to_owned();
                 format!("OK · {}", clip(&version, 90))
             }
-            Err(Error::Denied(_)) => i18n::t("not granted"),
+            Err(Error::Denied(_)) => i18n::t("not granted · re-approve after installing the CLI"),
             Err(e) => {
                 let detail = clip(&e.to_string(), 90);
                 i18n::tf("unavailable · {error}", &[("error", &detail)])

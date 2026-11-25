@@ -123,7 +123,6 @@
   "Available version": "Versão disponível",
   "select to install": "selecione para instalar",
   "{base} Configured version: {version}. Requires Java on the PATH.": "{base} Versão configurada: {version}. Requer Java no PATH.",
-  "Installed in {dir}. Point the process:* capabilities to {bin}/<script>.": "Instalado em {dir}. Aponte as capacidades process:* para {bin}/<script>.",
   "Download the official distribution and point the process:* capabilities to the extracted scripts.": "Baixe a distribuição oficial e aponte as capacidades process:* para os scripts extraídos.",
   "Kafka: choose a topic": "Kafka: escolha o tópico",
   "No topics in the cluster.": "Nenhum tópico no cluster.",
@@ -139,7 +138,6 @@
   "Connection {name} saved and activated ({count} topics found).": "Conexão {name} salva e ativada ({count} tópicos encontrados).",
   "Kafka: version to install": "Kafka: versão para instalar",
   "Version catalog unavailable.": "Catálogo de versões indisponível.",
-  "Apache Kafka {version} installed in {dir}.\n\nPoint the process:* capabilities to the scripts:\n{scripts}\n\nJava 17+ (Kafka 4.x) on the PATH is required.": "Apache Kafka {version} instalado em {dir}.\n\nAponte as capacidades process:* para os scripts:\n{scripts}\n\nÉ necessário Java 17+ (Kafka 4.x) no PATH.",
   "CLI {version} installed.": "CLI {version} instalada.",
   "New topic name": "Nome do novo tópico",
   "Number of partitions": "Número de partições",
@@ -214,7 +212,6 @@
   "Invalid host in {part}.": "Host inválido em {part}.",
   "Invalid property {prop}: use key=value.": "Propriedade inválida {prop}: use chave=valor.",
   "Property without a key (use key=value).": "Propriedade sem chave (use chave=valor).",
-  "Capability {cap} is not granted. In Settings › Plugins › Kafka › Capabilities, enable it and point the program to the script of the Apache Kafka distribution (or install the CLI with \"Kafka: Download and Install the Apache Kafka CLI\").": "Capacidade {cap} não concedida. Em Settings › Plugins › Kafka › Capacidades, habilite-a e aponte o programa para o script da distribuição Apache Kafka (ou instale a CLI pelo comando \"Kafka: Baixar e instalar a CLI do Apache Kafka\").",
   "The process:kcat capability is not granted. Install kcat with your system package manager and enable it in Settings › Plugins › Kafka › Capabilities (or publish without a target partition).": "Capacidade process:kcat não concedida. Instale o kcat pelo gerenciador de pacotes do sistema e habilite-a em Settings › Plugins › Kafka › Capacidades (ou publique sem partição definida).",
   "The cluster refused the operation due to permissions/ACL. Check the user's grants.": "O cluster recusou a operação por permissão/ACL. Verifique as grants do usuário.",
   "Timed out talking to the cluster. Check the bootstrap servers, the network and request.timeout.ms in the client properties.": "Timeout ao falar com o cluster. Verifique os bootstrap servers, a rede e request.timeout.ms nas propriedades do cliente.",
@@ -279,5 +276,9 @@
   "Connection: {name}\nBootstrap servers: {servers}\nSecurity: {security}\nClient properties file: {file}\nSASL JAAS config: {jaas}\nExtra properties: {extra}": "Conexão: {name}\nBootstrap servers: {servers}\nSegurança: {security}\nArquivo de propriedades: {file}\nConfig JAAS SASL: {jaas}\nPropriedades extras: {extra}",
   "For development you can paste sasl.jaas.config in the connection; a .properties file keeps credentials out of the plugin.": "Para desenvolvimento você pode colar o sasl.jaas.config na conexão; um arquivo .properties mantém as credenciais fora do plugin.",
   "Authentication failed. Check security.protocol, the SASL mechanism and the credentials (client properties file or inline JAAS).": "Falha de autenticação. Verifique security.protocol, o mecanismo SASL e as credenciais (arquivo .properties ou JAAS inline).",
-  "No connection is being edited. Use 'Kafka: New Connection.'": "Nenhuma conexão está sendo editada. Use 'Kafka: Nova conexão'."
+  "No connection is being edited. Use 'Kafka: New Connection.'": "Nenhuma conexão está sendo editada. Use 'Kafka: Nova conexão'.",
+  "Capability {cap} is not granted. In Settings › Plugins › Kafka › Capabilities, enable it and point the program to the script of the Apache Kafka distribution. If you installed the CLI after allowing it, remove and re-add the capability: OpenIDEA resolves the program when the permission is granted.": "Capacidade {cap} não concedida. Em Settings › Plugins › Kafka › Capacidades, habilite-a e aponte o programa para o script da distribuição Apache Kafka. Se você instalou a CLI depois de permitir a capacidade, remova-a e adicione-a novamente: o OpenIDEA resolve o programa quando a permissão é concedida.",
+  "Apache Kafka {version} installed in {dir}.\n\nNow remove and re-add the process:* capabilities in Settings › Plugins › Kafka › Capabilities (OpenIDEA resolves each program when you approve it). Point them to:\n{scripts}\n\nJava 17+ (Kafka 4.x) on the PATH is required.": "Apache Kafka {version} instalado em {dir}.\n\nAgora remova e adicione novamente as capacidades process:* em Settings › Plugins › Kafka › Capacidades (o OpenIDEA resolve cada programa quando você o aprova). Aponte-as para:\n{scripts}\n\nÉ necessário Java 17+ (Kafka 4.x) no PATH.",
+  "Installed in {dir}. If you allowed process:* before installing, remove and re-add each capability in Settings › Plugins › Kafka › Capabilities and point it to {bin}/<script>.": "Instalado em {dir}. Se você permitiu process:* antes da instalação, remova e adicione novamente cada capacidade em Settings › Plugins › Kafka › Capacidades, apontando-a para {bin}/<script>.",
+  "not granted · re-approve after installing the CLI": "não concedida · reaprove após instalar a CLI"
 }
