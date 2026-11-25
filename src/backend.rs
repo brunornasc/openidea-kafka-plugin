@@ -358,17 +358,18 @@ fn properties_path(c: &Connection) -> Result<Option<String>, Error> {
         return Ok(None);
     }
     let dir = host::fs::plugin_dir()?;
-    let hash = stable_hash(&format!(
-        "{}|{}|{}",
-        c.id, c.security_protocol, c.sasl_jaas_config
-    ));
-    let path = format!("{dir}/kafka-client-{hash:016x}.properties");
-    let body = format!(
-        "security.protocol={}\nsasl.mechanism={}\nsasl.jaas.config={}\n",
-        c.security_protocol,
-        c.sasl_mechanism,
+    let mut lines: Vec<String> = c
+        .java_properties()
+        .into_iter()
+        .map(|(key, value)| format!("{key}={value}"))
+        .collect();
+    lines.push(format!(
+        "sasl.jaas.config={}",
         one_line_jaas(&c.sasl_jaas_config)
-    );
+    ));
+    let body = format!("{}\n", lines.join("\n"));
+    let hash = stable_hash(&format!("{}|{}", c.id, body));
+    let path = format!("{dir}/kafka-client-{hash:016x}.properties");
     host::fs::write_file(&path, &body).map_err(|e| {
         Error::Failed(i18n::tf(
             "Could not write the inline JAAS properties file: {error}",
@@ -390,11 +391,14 @@ fn client_props(c: &Connection, tool: Tool, modern: bool) -> Result<Vec<String>,
         out.push(config_flag.into());
         out.push(path);
     }
+    // Apenas ConsoleConsumer/ConsoleProducer aceitam `--command-property`
+    // (ou `--consumer/--producer-property` no Kafka 3.x). Os comandos de
+    // administração só leem configurações via `--command-config`.
     let property_flag = match (tool, modern) {
         (Tool::Consumer, false) => "--consumer-property",
         (Tool::Producer, false) => "--producer-property",
-        (Tool::Topics | Tool::Groups | Tool::Offsets | Tool::Brokers | Tool::Quorum, false) => "",
-        _ => "--command-property",
+        (Tool::Consumer | Tool::Producer, true) => "--command-property",
+        _ => "",
     };
     if !property_flag.is_empty() {
         for (key, value) in c.java_properties() {
@@ -1084,9 +1088,8 @@ mod tests {
         host.on_process(TOPICS, |args, _| {
             let joined = args.join(" ");
             assert!(joined.contains("--command-config /home/user/kafka.properties"));
-            assert!(joined.contains("security.protocol=SASL_SSL"));
-            assert!(joined.contains("sasl.mechanism=SCRAM-SHA-256"));
-            assert!(joined.contains("request.timeout.ms=10000"));
+            assert!(!joined.contains("--command-property"));
+            assert!(!joined.contains("security.protocol="));
             assert!(!joined.contains("password"));
             ok("t\n")
         });
@@ -1116,7 +1119,12 @@ mod tests {
         let body = host::fs::read_file(&path).unwrap();
         assert!(body.contains("security.protocol=SASL_PLAINTEXT"), "{body}");
         assert!(body.contains("sasl.mechanism=PLAIN"), "{body}");
-        let jaas_line = body.lines().nth(2).unwrap();
+        assert!(body.contains("request.timeout.ms=5000"), "{body}");
+        assert!(body.contains("default.api.timeout.ms=5000"), "{body}");
+        let jaas_line = body
+            .lines()
+            .find(|line| line.starts_with("sasl.jaas.config="))
+            .unwrap();
         assert_eq!(
             jaas_line,
             "sasl.jaas.config=org.example.LoginModule required username=\"dev\" password=\"super\\\\secret\";",
@@ -1170,7 +1178,7 @@ mod tests {
         let host = crate::mock_host();
         let calls = std::rc::Rc::new(std::cell::Cell::new(0));
         let counter = calls.clone();
-        host.on_process(TOPICS, move |args, _| {
+        host.on_process(CONSUMER, move |args, _| {
             counter.set(counter.get() + 1);
             if args.iter().any(|a| a == "--command-property") {
                 Ok(ProcessOutput {
@@ -1184,8 +1192,26 @@ mod tests {
         });
         let mut c = connection();
         c.extra_properties = vec!["request.timeout.ms=1000".into()];
-        list_topics(&c).unwrap();
+        let opts = ConsumeOptions {
+            topic: "t".into(),
+            ..ConsumeOptions::default()
+        };
+        consume(&c, &opts).unwrap();
         assert_eq!(calls.get(), 2);
+    }
+
+    #[test]
+    fn admin_commands_do_not_send_unsupported_command_properties() {
+        let host = crate::mock_host();
+        let mut c = connection();
+        c.security_protocol = "SASL_PLAINTEXT".into();
+        c.sasl_mechanism = "PLAIN".into();
+        host.on_process(TOPICS, |args, _| {
+            assert!(!args.iter().any(|a| a == "--command-property"));
+            assert!(!args.iter().any(|a| a.contains("security.protocol=")));
+            ok("t\n")
+        });
+        list_topics(&c).unwrap();
     }
 
     #[test]

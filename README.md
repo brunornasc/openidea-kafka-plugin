@@ -76,23 +76,33 @@ and point the optional script capabilities at its `bin/` scripts.
   is in `kafka:active`.
 - Security: `PLAINTEXT`, `SSL`, `SASL_PLAINTEXT`, `SASL_SSL` with `PLAIN`,
   `SCRAM-SHA-256` or `SCRAM-SHA-512`. The **Security protocol** and **SASL
-  mechanism** chosen in the form are forwarded to the Java scripts as
-  `--command-property` (plus `-X` for `kcat`). TLS: CA/certificate/key (PEM,
-  for `kcat`) and truststore/keystore (JKS, for the Java tools), forwarded as
-  client properties.
+  mechanism** chosen in the form go into the generated client properties file
+  passed with `--command-config` (plus `-X` for `kcat`). TLS: CA/certificate/key
+  (PEM, for `kcat`) and truststore/keystore (JKS, for the Java tools), also
+  forwarded as client properties. Admin commands (`TopicCommand`,
+  `ConsumerGroupCommand`, `GetOffsetShell`, `BrokerApiVersionsCommand`,
+  `MetadataQuorumCommand`) do **not** accept `--command-property`; only
+  `ConsoleConsumer`/`ConsoleProducer` do.
+- `request.timeout.ms` and `default.api.timeout.ms` default to the **Client
+  timeout (ms)** setting (5000 ms). Any matching entry in **Extra properties**
+  or in an explicit **Client properties file** takes precedence.
 - **Credentials for SASL**: either point **Client properties file** at your
-  own `.properties` file (recommended), or paste the whole `sasl.jaas.config`
-  into **SASL JAAS config (inline, dev only)**. The inline value is written to
-  an owner-only file in the plugin's private directory and only that path is
-  passed to the scripts — it never appears in `argv` or in process output.
-  Multiline JAAS is folded into one properties line and backslashes are
-  escaped. If both are filled, the explicit file takes precedence.
-  The inline value is stored in plain text with the profile: development only.
+  own `.properties` file (recommended for real credentials), or paste the whole
+  `sasl.jaas.config` into **SASL JAAS config (inline, dev only)**. The inline
+  value is written to an owner-only file in the plugin's private directory and
+  only that path is passed to the Java process — it never appears in `argv` or
+  in process output. Multiline JAAS is folded into one properties line and
+  backslashes are escaped. If both are filled, the explicit file takes
+  precedence. The inline value is stored in plain text with the profile:
+  development only.
 - **"Test and Save" runs `kafka-topics.sh --list` before persisting** — if the
   cluster does not answer, nothing is stored. There is also a standalone
-  **Kafka: Test Connection** command.
-- Extra `key=value` properties (one per line) become
-  `--command-property` / `--consumer-property` / `--producer-property` / `-X`.
+  **Kafka: Test Connection** command. CLI calls open a cancellable task that
+  extends the host's 5-second call budget to up to 60 seconds.
+- Extra `key=value` properties (one per line) become client properties; on
+  `ConsoleConsumer`/`ConsoleProducer` they are also passed as
+  `--command-property` / `--consumer-property` / `--producer-property` (and as
+  `-X` for `kcat`).
 
 ### 2. Topics
 

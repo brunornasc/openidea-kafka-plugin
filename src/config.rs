@@ -172,7 +172,18 @@ impl Connection {
             out.push(("security.protocol".into(), self.security_protocol.clone()));
             out.push(("sasl.mechanism".into(), self.sasl_mechanism.clone()));
         }
-        out.extend(self.extra_pairs());
+        // Falha rápido quando o broker não responde, em vez de deixar a JVM
+        // presa até o limite do task do host.
+        let timeout = timeout_ms().to_string();
+        let extras = self.extra_pairs();
+        let has = |key: &str| extras.iter().any(|(k, _)| k == key);
+        if !has("request.timeout.ms") {
+            out.push(("request.timeout.ms".into(), timeout.clone()));
+        }
+        if !has("default.api.timeout.ms") {
+            out.push(("default.api.timeout.ms".into(), timeout));
+        }
+        out.extend(extras);
         out
     }
 
