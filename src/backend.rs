@@ -62,6 +62,36 @@ impl Tool {
             Self::Quorum => QUORUM,
         }
     }
+
+    /// Classe Java executada pelo script da distribuição. Kafka 3.7+ e 4.x
+    /// usam pacotes `org.apache.kafka.tools`; 3.6 ainda usa `kafka.*`.
+    fn main_class(self, version: &str) -> &'static str {
+        let mut parts = version.split('.');
+        let major = parts
+            .next()
+            .and_then(|p| p.parse::<u64>().ok())
+            .unwrap_or(4);
+        let minor = parts
+            .next()
+            .and_then(|p| p.parse::<u64>().ok())
+            .unwrap_or(0);
+        let new = major > 3 || (major == 3 && minor >= 7);
+        match (self, new) {
+            (Self::Topics, true) => "org.apache.kafka.tools.TopicCommand",
+            (Self::Topics, false) => "kafka.tools.TopicCommand",
+            (Self::Consumer, true) => "org.apache.kafka.tools.consumer.ConsoleConsumer",
+            (Self::Consumer, false) => "kafka.tools.ConsoleConsumer",
+            (Self::Producer, true) => "org.apache.kafka.tools.ConsoleProducer",
+            (Self::Producer, false) => "kafka.tools.ConsoleProducer",
+            (Self::Groups, true) => "org.apache.kafka.tools.consumer.group.ConsumerGroupCommand",
+            (Self::Groups, false) => "kafka.admin.ConsumerGroupCommand",
+            (Self::Offsets, true) => "org.apache.kafka.tools.GetOffsetShell",
+            (Self::Offsets, false) => "kafka.tools.GetOffsetShell",
+            (Self::Brokers, true) => "org.apache.kafka.tools.BrokerApiVersionsCommand",
+            (Self::Brokers, false) => "kafka.admin.BrokerApiVersionsCommand",
+            (Self::Quorum, _) => "org.apache.kafka.tools.MetadataQuorumCommand",
+        }
+    }
 }
 
 // ------------------------------------------------------------- execução
@@ -70,6 +100,12 @@ fn friendly_denied(cap: &str) -> Error {
     if cap.contains("kcat") {
         return i18n::t(
             "The process:kcat capability is not granted. Install kcat with your system package manager and enable it in Settings › Plugins › Kafka › Capabilities (or publish without a target partition)."
+        )
+        .into();
+    }
+    if cap.contains("java") {
+        return i18n::t(
+            "The process:java capability is not granted. Java is on the PATH, but OpenIDEA still needs it approved in Settings › Plugins › Kafka › Capabilities to run the installed Kafka distribution.",
         )
         .into();
     }
@@ -182,31 +218,56 @@ fn run(program: &str, args: &[String], stdin: Option<&str>) -> Result<ProcessOut
     }
 }
 
+/// Executa a distribuição baixada diretamente com `java -cp`, sem depender
+/// das capacidades `process:*.sh` (que ficam presas ao programa aprovado).
+/// Se `process:java` não estiver concedida, cai para o script instalado no
+/// sistema, mantendo compatibilidade com quem já apontou as capacidades.
+fn java_command(tool: Tool, args: &[String]) -> Option<(String, Vec<String>)> {
+    let info = config::install_info()?;
+    let mut out = vec![
+        "-cp".into(),
+        format!("{}/libs/*", info.dir.trim_end_matches('/')),
+        tool.main_class(&info.version).into(),
+    ];
+    out.extend(args.iter().cloned());
+    Some((JAVA.into(), out))
+}
+
 /// Tenta os sinalizadores do Kafka 4.x e cai para os do 3.x quando a CLI
 /// rejeita uma opção. `cliFlavour` permite fixar uma das formas.
 fn run_compat(
-    program: &str,
+    tool: Tool,
     modern: Vec<String>,
     legacy: Vec<String>,
     stdin: Option<&str>,
 ) -> Result<ProcessOutput, Error> {
+    let attempt = |args: &[String]| -> Result<ProcessOutput, Error> {
+        if let Some((program, full)) = java_command(tool, args) {
+            match raw(&program, &full, stdin) {
+                Ok(out) => return Ok(out),
+                // Java não aprovado: ainda é possível usar os scripts.
+                Err(Error::Denied(_)) => {}
+                Err(e) => return Err(friendly(e)),
+            }
+        }
+        raw(tool.program(), args, stdin).map_err(friendly)
+    };
+    let program = tool.program();
+    let finish = |out: ProcessOutput| match classify(&out, program) {
+        Some(e) => Err(e),
+        None => Ok(out),
+    };
     match config::cli_flavour().as_str() {
-        "kafka4" => return run(program, &modern, stdin),
-        "kafka3" => return run(program, &legacy, stdin),
+        "kafka4" => return finish(attempt(&modern)?),
+        "kafka3" => return finish(attempt(&legacy)?),
         _ => {}
     }
-    let first = raw(program, &modern, stdin).map_err(friendly)?;
+    let first = attempt(&modern)?;
     if unknown_option(&first) {
-        let second = raw(program, &legacy, stdin).map_err(friendly)?;
-        return match classify(&second, program) {
-            Some(e) => Err(e),
-            None => Ok(second),
-        };
+        let second = attempt(&legacy)?;
+        return finish(second);
     }
-    match classify(&first, program) {
-        Some(e) => Err(e),
-        None => Ok(first),
-    }
+    finish(first)
 }
 
 fn execute(
@@ -217,7 +278,7 @@ fn execute(
 ) -> Result<ProcessOutput, Error> {
     let modern = build(c, tool, true, specific(true)?)?;
     let legacy = build(c, tool, false, specific(false)?)?;
-    run_compat(tool.program(), modern, legacy, stdin)
+    run_compat(tool, modern, legacy, stdin)
 }
 
 fn build(
@@ -671,8 +732,10 @@ pub fn live_log(c: &Connection, opts: &ConsumeOptions) -> Result<ProcessLog, Err
     live.live = true;
     let modern = config::cli_flavour() != "kafka3";
     let args = consume_args(c, &live, modern)?;
-    let refs: Vec<&str> = args.iter().map(String::as_str).collect();
-    let mut log = ProcessLog::new(CONSUMER, &refs);
+    let (program, full) =
+        java_command(Tool::Consumer, &args).unwrap_or_else(|| (CONSUMER.into(), args.clone()));
+    let refs: Vec<&str> = full.iter().map(String::as_str).collect();
+    let mut log = ProcessLog::new(&program, &refs);
     if live.partition.is_none() && live.start != "beginning" {
         log = log.toggle(
             "from-beginning",
@@ -910,9 +973,15 @@ pub fn check_backend() -> BackendStatus {
         installed: config::install_info(),
         ..BackendStatus::default()
     };
-    for program in [
-        CURL, TAR, TOPICS, CONSUMER, PRODUCER, GROUPS, OFFSETS, BROKERS, QUORUM, KCAT,
-    ] {
+    let programs: Vec<&str> = if status.installed.is_some() {
+        // Com a distribuição instalada, os scripts não são necessários.
+        vec![CURL, TAR, JAVA, KCAT]
+    } else {
+        vec![
+            CURL, TAR, TOPICS, CONSUMER, PRODUCER, GROUPS, OFFSETS, BROKERS, QUORUM, KCAT,
+        ]
+    };
+    for program in programs {
         let result = raw(program, &strings(&["--version"]), None);
         let state = match result {
             Ok(out) => {
@@ -1042,6 +1111,41 @@ mod tests {
                 .iter()
                 .all(|r| !r.args.iter().any(|a| a.contains("LoginModule"))),
             "the secret must not appear in argv"
+        );
+    }
+
+    #[test]
+    fn installed_distribution_runs_directly_with_java() {
+        let host = crate::mock_host();
+        config::set_install_info(&config::InstallInfo {
+            version: "4.4.0".into(),
+            dir: "/plugins/kafka_2.13-4.4.0".into(),
+            bin: "/plugins/kafka_2.13-4.4.0/bin".into(),
+        })
+        .unwrap();
+        host.on_process(JAVA, |args, _| {
+            assert!(args.iter().any(|a| a == "/plugins/kafka_2.13-4.4.0/libs/*"));
+            assert!(
+                args.iter()
+                    .any(|a| a == "org.apache.kafka.tools.TopicCommand")
+            );
+            assert!(args.iter().any(|a| a == "--list"));
+            ok("t\n")
+        });
+        list_topics(&connection()).unwrap();
+        assert_eq!(host.process_runs()[0].program, JAVA);
+    }
+
+    #[test]
+    fn java_main_classes_follow_the_kafka_generation() {
+        assert_eq!(
+            Tool::Topics.main_class("4.4.0"),
+            "org.apache.kafka.tools.TopicCommand"
+        );
+        assert_eq!(Tool::Topics.main_class("3.6.2"), "kafka.tools.TopicCommand");
+        assert_eq!(
+            Tool::Groups.main_class("3.6.2"),
+            "kafka.admin.ConsumerGroupCommand"
         );
     }
 

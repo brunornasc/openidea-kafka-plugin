@@ -45,20 +45,23 @@ OpenIDEA (WASM) --host::run_process--> kafka-topics.sh / console-consumer.sh / �
    list 4.4.0 → 3.6.2), downloads `kafka_2.13-<version>.tgz` with `curl` and
    extracts it with `tar` into the plugin's private directory
    (`host::fs::plugin_dir()`).
-2. The **Kafka CLI** view shows the installed version, the catalog and the
-   state of every program; **Kafka: Verify CLI Installation** probes each
-   `process:*` grant and Java. **Kafka: Copy Script Paths** copies the list.
-3. In *Settings › Plugins › Kafka › Capabilities*, point each
-   `process:kafka-*.sh` capability at the matching script inside
-   `<plugin-dir>/kafka_2.13-<version>/bin/` (or put that `bin/` on the `PATH`
-   before granting). Grants pin the approved executable, which is what makes
-   running the downloaded CLI safe.
-4. **Prerequisite:** Java 17+ on the `PATH` for Kafka 4.x (11+ for 3.x).
-   `kcat` is optional and only needed to publish to a specific partition
-   (install it with your OS package manager).
+ 2. The installed distribution is launched directly as
+    `java -cp <plugin-dir>/kafka_2.13-<version>/libs/* <MainClass> …`, so no
+    `process:*.sh` grant is needed and scripts approved before installation do
+    not have to be re-approved. Only `process:java` is required; the host still
+    resolves Java when the permission is approved, but Java is already on the
+    `PATH`.
+ 3. The **Kafka CLI** view shows the installed version, the catalog and the
+    state of each program; **Kafka: Verify CLI Installation** probes the
+    grants. The `process:kafka-*.sh` capabilities remain as an optional
+    fallback for a Kafka installed outside the plugin; **Kafka: Copy Script
+    Paths** copies those paths.
+ 4. **Prerequisite:** Java 17+ on the `PATH` for Kafka 4.x (11+ for 3.x).
+    `kcat` is optional and only needed to publish to a specific partition
+    (install it with your OS package manager).
 
-If a Kafka distribution is already installed, skip step 1 and point the
-capabilities at its scripts.
+If a Kafka distribution is already installed outside the plugin, skip step 1
+and point the optional script capabilities at its `bin/` scripts.
 
 ---
 
@@ -196,8 +199,8 @@ Messages is `trash`.
 
 | Type | Capabilities |
 | --- | --- |
-| Required | `project.read`, `storage`, `events`, `process:curl`, `process:tar`, `process:kafka-topics.sh`, `process:kafka-console-consumer.sh`, `process:kafka-console-producer.sh` |
-| Optional | `process:kafka-consumer-groups.sh`, `process:kafka-get-offsets.sh`, `process:kafka-broker-api-versions.sh`, `process:kafka-metadata-quorum.sh`, `process:kafka-run-class.sh`, `process:kcat`, `process:java`, `net:downloads.apache.org`, `net:archive.apache.org`, `clipboard` |
+| Required | `project.read`, `storage`, `events`, `process:curl`, `process:tar`, `process:java` |
+| Optional | `process:kafka-topics.sh`, `process:kafka-console-consumer.sh`, `process:kafka-console-producer.sh`, `process:kafka-consumer-groups.sh`, `process:kafka-get-offsets.sh`, `process:kafka-broker-api-versions.sh`, `process:kafka-metadata-quorum.sh`, `process:kafka-run-class.sh`, `process:kcat`, `net:downloads.apache.org`, `net:archive.apache.org`, `clipboard` |
 
 Missing optional capabilities degrade gracefully: the view shows a note and
 the rest keeps working.

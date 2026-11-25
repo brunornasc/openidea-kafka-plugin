@@ -32,18 +32,18 @@ required = [
   "events",
   "process:curl",
   "process:tar",
+  "process:java",
+]
+optional = [
   "process:kafka-topics.sh",
   "process:kafka-console-consumer.sh",
   "process:kafka-console-producer.sh",
-]
-optional = [
   "process:kafka-consumer-groups.sh",
   "process:kafka-get-offsets.sh",
   "process:kafka-broker-api-versions.sh",
   "process:kafka-metadata-quorum.sh",
   "process:kafka-run-class.sh",
   "process:kcat",
-  "process:java",
   "net:downloads.apache.org",
   "net:archive.apache.org",
   "clipboard",

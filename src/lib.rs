@@ -374,7 +374,7 @@ impl Kafka {
                     .collect::<Vec<_>>()
                     .join("\n");
                 let text = i18n::tf(
-                    "Apache Kafka {version} installed in {dir}.\n\nNow remove and re-add the process:* capabilities in Settings › Plugins › Kafka › Capabilities (OpenIDEA resolves each program when you approve it). Point them to:\n{scripts}\n\nJava 17+ (Kafka 4.x) on the PATH is required.",
+                    "Apache Kafka {version} installed in {dir}.\n\nThe plugin runs it directly with java -cp {dir}/libs/*, so you only need the process:java capability — no script re-approval. If process:java was not granted, enable it in Settings › Plugins › Kafka › Capabilities. Scripts (optional fallback):\n{scripts}\n\nJava 17+ (Kafka 4.x) on the PATH is required.",
                     &[
                         ("version", &version),
                         ("dir", &info.dir),
@@ -1382,7 +1382,7 @@ impl Kafka {
         };
         let base = match config::install_info() {
             Some(info) => i18n::tf(
-                "Installed in {dir}. If you allowed process:* before installing, remove and re-add each capability in Settings › Plugins › Kafka › Capabilities and point it to {bin}/<script>.",
+                "Installed in {dir}. The CLI runs directly with process:java and {bin}/../libs. Script capabilities are only needed for a Kafka installed outside the plugin.",
                 &[("dir", &info.dir), ("bin", &info.bin)],
             ),
             None => i18n::t(
