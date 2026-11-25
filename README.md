@@ -45,22 +45,30 @@ OpenIDEA (WASM) --host::run_process--> kafka-topics.sh / console-consumer.sh / �
    list 4.4.0 → 3.6.2), downloads `kafka_2.13-<version>.tgz` with `curl` and
    extracts it with `tar` into the plugin's private directory
    (`host::fs::plugin_dir()`). A host call lasts at most 60 s and the tarball is
-   ~130 MB: `curl` is bounded to 50 s per call and resumes with `-C -` on the
-   next scheduled tick, so a slow download completes on its own instead of
-   being thrown away. The Install view shows a "resuming automatically" row
-   while it is in progress.
- 2. The installed distribution is launched directly as
+   ~130 MB: each call runs four `curl` chunks of 10 s that resume with `-C -`,
+   reporting the downloaded size (`Downloaded 42 MB of 129 MB`) in the status
+   bar. When a call ends before the file is complete, the download continues
+   automatically on the next scheduled tick; the Install view shows a
+   "resuming automatically" row while it is in progress.
+ 2. If you already have `kafka_2.13-<version>.tgz` on your machine (for example
+   from a previous download), use **Kafka: Install CLI from a Local Tarball**
+   (or the **Install from Local File** button in the Install view). Pick the
+   absolute path to the `.tgz` and the plugin extracts it directly with `tar`.
+   The version is inferred from `kafka_2.13-<version>.tgz` (otherwise the
+   configured `kafkaVersion` is used) — no re-download and no `fs.read`
+   capability needed. `~/` is not expanded: use the full path.
+ 3. The installed distribution is launched directly as
     `java -cp <plugin-dir>/kafka_2.13-<version>/libs/* <MainClass> …`, so no
     `process:*.sh` grant is needed and scripts approved before installation do
     not have to be re-approved. Only `process:java` is required; the host still
     resolves Java when the permission is approved, but Java is already on the
     `PATH`.
- 3. The **Kafka CLI** view shows the installed version, the catalog and the
+ 4. The **Kafka CLI** view shows the installed version, the catalog and the
     state of each program; **Kafka: Verify CLI Installation** probes the
     grants. The `process:kafka-*.sh` capabilities remain as an optional
     fallback for a Kafka installed outside the plugin; **Kafka: Copy Script
     Paths** copies those paths.
- 4. **Prerequisite:** Java 17+ on the `PATH` for Kafka 4.x (11+ for 3.x).
+ 5. **Prerequisite:** Java 17+ on the `PATH` for Kafka 4.x (11+ for 3.x).
     `kcat` is optional and only needed to publish to a specific partition
     (install it with your OS package manager).
 

@@ -37,6 +37,7 @@ const CONNECTIONS: &str = "connections";
 const BROKERS: &str = "brokers";
 const GROUPS: &str = "groups";
 const INSTALL: &str = "install";
+const INSTALL_FILE: &str = "install-from-file";
 const ALL_VIEWS: [&str; 7] = [
     EXPLORER,
     TOPICS,
@@ -450,6 +451,27 @@ impl Kafka {
                         ("dir", &info.dir),
                         ("scripts", &scripts),
                     ],
+                );
+                host::notify(
+                    NotificationLevel::Info,
+                    "Kafka",
+                    &i18n::tf("CLI {version} installed.", &[("version", &version)]),
+                );
+                Ok(Some(text))
+            }
+            INSTALL_FILE => {
+                let source = ask(&i18n::t("Kafka: local tarball to install"), None)?;
+                let version = if let Some(v) = arg.filter(|s| !s.is_empty()) {
+                    v.to_owned()
+                } else {
+                    backend::version_from_tarball(&source).unwrap_or_else(config::kafka_version)
+                };
+                let info = backend::install_from_file(&version, &source)?;
+                self.backend = Some(backend::check_backend());
+                Self::refresh_all();
+                let text = i18n::tf(
+                    "Apache Kafka {version} installed in {dir} from the local tarball.",
+                    &[("version", &version), ("dir", &info.dir)],
                 );
                 host::notify(
                     NotificationLevel::Info,
@@ -1509,6 +1531,7 @@ impl Kafka {
         );
         View::new(Body::sortable_table(&table, None))
             .button(Button::new("install-backend", "Download and Install").icon("download"))
+            .button(Button::new(INSTALL_FILE, "Install from Local File").icon("download"))
             .button(Button::new("refresh-catalog", "Refresh Catalog").icon("refresh"))
             .button(Button::new("check-backend", "Verify CLI").icon("settings"))
             .button(Button::new("copy-paths", "Copy Paths").icon("copy"))
@@ -2394,6 +2417,7 @@ mod tests {
         plugin.activate(&host.context("brunornasc.kafka")).unwrap();
         let view = plugin.render_install();
         assert!(view.toolbar.iter().any(|b| b.id == "install-backend"));
+        assert!(view.toolbar.iter().any(|b| b.id == INSTALL_FILE));
         assert!(view.status.unwrap_or_default().contains("capabilities"));
     }
 

@@ -144,6 +144,11 @@ title = "Kafka: Download and Install the Apache Kafka CLI"
 category = "Kafka"
 
 [[contributes.commands]]
+id = "install-from-file"
+title = "Kafka: Install CLI from a Local Tarball"
+category = "Kafka"
+
+[[contributes.commands]]
 id = "check-backend"
 title = "Kafka: Verify CLI Installation"
 category = "Kafka"
@@ -235,6 +240,10 @@ command = "open"
 [[contributes.menus]]
 menu = "tools"
 command = "install-backend"
+
+[[contributes.menus]]
+menu = "tools"
+command = "install-from-file"
 
 [[contributes.statusBar]]
 id = "kafka"

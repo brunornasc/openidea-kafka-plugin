@@ -241,7 +241,7 @@
   "Downloading the Apache Kafka tarball": "Baixando o tarball do Apache Kafka",
   "Extracting the distribution": "Extraindo a distribuição",
   "Verifying the scripts": "Verificando os scripts",
-  "The extraction finished, but {path} was not found. Check the downloaded tarball.": "A extração terminou, mas {path} não foi encontrado. Verifique o tarball baixado.",
+  "The extraction finished, but {path} was not found. Check the tarball and the chosen version.": "A extração terminou, mas {path} não foi encontrado. Verifique o tarball e a versão escolhida.",
   "available": "disponível",
   "not granted": "não concedido",
   "unavailable · {error}": "indisponível · {error}",
@@ -316,5 +316,13 @@
   "Download": "Download",
   "resuming automatically": "retomando automaticamente",
   "Kafka {version} is downloading in the background. It resumes automatically every minute; the Install view shows the progress.": "O Kafka {version} está sendo baixado em segundo plano. O download retoma automaticamente a cada minuto; a tela Install mostra o progresso.",
-  "Could not download {url}: {detail}. Check kafkaVersion and downloadUrl.": "Não foi possível baixar {url}: {detail}. Verifique kafkaVersion e downloadUrl."
+  "Could not download {url}: {detail}. Check kafkaVersion and downloadUrl.": "Não foi possível baixar {url}: {detail}. Verifique kafkaVersion e downloadUrl.",
+  "Downloaded {done} MB of {total} MB": "Baixados {done} MB de {total} MB",
+  "Downloaded {done} MB": "Baixados {done} MB",
+  "Kafka: Install CLI from a Local Tarball": "Kafka: Instalar CLI a partir de um tarball local",
+  "Install from Local File": "Instalar do arquivo local",
+  "Kafka: local tarball to install": "Kafka: tarball local para instalar",
+  "Choose the local Kafka tarball.": "Escolha o tarball local do Kafka.",
+  "Kafka: installing from a local tarball": "Kafka: instalando a partir de um tarball local",
+  "Apache Kafka {version} installed in {dir} from the local tarball.": "Apache Kafka {version} instalado em {dir} a partir do tarball local."
 }
