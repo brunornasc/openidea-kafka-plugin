@@ -278,5 +278,6 @@
   "inline": "inline",
   "Connection: {name}\nBootstrap servers: {servers}\nSecurity: {security}\nClient properties file: {file}\nSASL JAAS config: {jaas}\nExtra properties: {extra}": "Conexão: {name}\nBootstrap servers: {servers}\nSegurança: {security}\nArquivo de propriedades: {file}\nConfig JAAS SASL: {jaas}\nPropriedades extras: {extra}",
   "For development you can paste sasl.jaas.config in the connection; a .properties file keeps credentials out of the plugin.": "Para desenvolvimento você pode colar o sasl.jaas.config na conexão; um arquivo .properties mantém as credenciais fora do plugin.",
-  "Authentication failed. Check security.protocol, the SASL mechanism and the credentials (client properties file or inline JAAS).": "Falha de autenticação. Verifique security.protocol, o mecanismo SASL e as credenciais (arquivo .properties ou JAAS inline)."
+  "Authentication failed. Check security.protocol, the SASL mechanism and the credentials (client properties file or inline JAAS).": "Falha de autenticação. Verifique security.protocol, o mecanismo SASL e as credenciais (arquivo .properties ou JAAS inline).",
+  "No connection is being edited. Use 'Kafka: New Connection.'": "Nenhuma conexão está sendo editada. Use 'Kafka: Nova conexão'."
 }

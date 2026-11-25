@@ -122,6 +122,18 @@ impl Kafka {
         })
     }
 
+    /// Testa um perfil (salvo ou rascunho) e devolve o texto do resultado.
+    fn tested_connection_text(&self, profile: &Connection) -> Result<String, Error> {
+        let count = backend::test_connection(profile)?;
+        Ok(i18n::tf(
+            "Connection OK: {count} topics at {servers}.",
+            &[
+                ("count", &count.to_string()),
+                ("servers", &profile.bootstrap_servers),
+            ],
+        ))
+    }
+
     fn ensure_topics(&mut self) -> Result<(), Error> {
         if self.topic_names.is_empty() {
             self.reload()?;
@@ -274,14 +286,20 @@ impl Kafka {
                 let id = self.choose_connection(arg)?;
                 let profile = config::by_id(&id)
                     .ok_or_else(|| i18n::tf("Connection {id} not found.", &[("id", &id)]))?;
-                let count = backend::test_connection(&profile)?;
-                let text = i18n::tf(
-                    "Connection OK: {count} topics at {servers}.",
-                    &[
-                        ("count", &count.to_string()),
-                        ("servers", &profile.bootstrap_servers),
-                    ],
-                );
+                let text = self.tested_connection_text(&profile)?;
+                host::notify(NotificationLevel::Info, "Kafka", &text);
+                Ok(Some(text))
+            }
+            "connection-test-draft" => {
+                let mut profile = self.draft.clone().ok_or_else(|| {
+                    Error::from(i18n::t(
+                        "No connection is being edited. Use 'Kafka: New Connection.'",
+                    ))
+                })?;
+                if profile.id.is_empty() {
+                    profile.id = config::new_id(&profile.name);
+                }
+                let text = self.tested_connection_text(&profile)?;
                 host::notify(NotificationLevel::Info, "Kafka", &text);
                 Ok(Some(text))
             }
@@ -1154,7 +1172,7 @@ impl Kafka {
         View::new(Body::Form(fields))
             .button(Button::new("connection-new", "New").icon("plus"))
             .button(Button::new("connection-save", "Test and Save").icon("check"))
-            .button(Button::new("connection-test", "Test").icon("run"))
+            .button(Button::new("connection-test-draft", "Test").icon("run"))
             .button(Button::new("connection-edit", "Edit").icon("settings"))
             .button(Button::new("connection-activate", "Activate").icon("check"))
             .button(Button::new("connection-delete", "Delete").icon("trash"))
@@ -2024,6 +2042,23 @@ mod tests {
     }
 
     #[test]
+    fn the_connections_test_button_tests_the_draft_without_saving() {
+        let host = host_with_cluster();
+        let mut plugin = Kafka::default();
+        plugin.draft = Some(Connection::new("", "New cluster"));
+        plugin.draft.as_mut().unwrap().bootstrap_servers = "localhost:9092".into();
+        let out = plugin
+            .command("connection-test-draft", &host.invocation(), None)
+            .unwrap()
+            .unwrap();
+        assert!(out.contains("Connection OK"), "{out}");
+        assert!(
+            config::load_profiles().is_empty(),
+            "testing must not save the draft"
+        );
+    }
+
+    #[test]
     fn deleting_a_topic_asks_for_confirmation() {
         let host = host_with_cluster();
         active_connection(&host);
@@ -2155,5 +2190,6 @@ mod tests {
         assert!(fields.iter().any(|f| f.key == "client_properties"));
         assert!(fields.iter().any(|f| f.key == "sasl_jaas_config"));
         assert!(fields.iter().any(|f| f.key == "security_protocol"));
+        assert!(view.toolbar.iter().any(|b| b.id == "connection-test-draft"));
     }
 }
