@@ -1,0 +1,46 @@
+{
+  "properties": {
+    "language": {
+      "type": "string",
+      "title": "Plugin language",
+      "enum": ["auto", "en-US", "pt-BR"],
+      "default": "auto"
+    },
+    "kafkaVersion": {
+      "type": "string",
+      "title": "Apache Kafka version to install",
+      "default": "4.1.2"
+    },
+    "downloadUrl": {
+      "type": "string",
+      "title": "Tarball URL template ({version} is substituted)",
+      "default": "https://downloads.apache.org/kafka/{version}/kafka_2.13-{version}.tgz"
+    },
+    "cliFlavour": {
+      "type": "string",
+      "title": "CLI flag compatibility",
+      "enum": ["auto", "kafka3", "kafka4"],
+      "default": "auto"
+    },
+    "maxMessages": {
+      "type": "integer",
+      "title": "Maximum messages per read",
+      "default": 200
+    },
+    "timeoutMs": {
+      "type": "integer",
+      "title": "Read timeout (ms)",
+      "default": 5000
+    },
+    "keepMessages": {
+      "type": "integer",
+      "title": "Messages kept in the viewer",
+      "default": 500
+    },
+    "autoRefresh": {
+      "type": "boolean",
+      "title": "Reload cluster metadata every minute",
+      "default": false
+    }
+  }
+}

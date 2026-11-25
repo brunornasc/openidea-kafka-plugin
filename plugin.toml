@@ -1,27 +1,246 @@
 id = "brunornasc.kafka"
 name = "Kafka"
 version = "0.1.0"
-description = "Manage Kafka from OpenIDEA."
+description = "Explore Apache Kafka clusters from OpenIDEA: connections, topics, partitions, brokers, consumer groups, live message consumption and publishing."
 authors = ["Bruno Rodrigues <brunornasc@gmail.com>"]
 license = "Apache-2.0"
-# Marketplace categories (up to 3): languages, themes, icon-themes, linters,
-# vcs, ai, frameworks, tools, other.
+change-notes = "0.1.0 — first release: connection profiles, Apache Kafka CLI download/install, topics, partitions, brokers, consumer groups, message consumption and publishing."
 categories = ["tools"]
-engines.openidea = "^1.0"
-# Built by `openidea-plugin build`. The code is loaded the first time one of
-# its commands runs; the commands below show in Find Action before that.
+icon = "icon.svg"
+engines.openidea = "^1.15"
 wasm = "dist/plugin.wasm"
+activation = [
+  "on-command:*",
+  "on-view:explorer",
+  "on-view:topics",
+  "on-view:messages",
+  "on-view:connections",
+  "on-view:brokers",
+  "on-view:groups",
+  "on-view:install",
+  "on-schedule:60",
+]
 
-# What the code may do. The user approves these when installing.
+# The WASM sandbox has no TCP sockets: Kafka operations run through the
+# Apache Kafka distribution scripts (`process:<program>`, the file the user
+# approved). curl/tar install that distribution into plugin-dir.
+# All user-facing text is English; locales/pt-BR.json is translated by the IDE.
 [capabilities]
-required = ["editor.read"]
+required = [
+  "project.read",
+  "storage",
+  "events",
+  "process:curl",
+  "process:tar",
+  "process:kafka-topics.sh",
+  "process:kafka-console-consumer.sh",
+  "process:kafka-console-producer.sh",
+]
+optional = [
+  "process:kafka-consumer-groups.sh",
+  "process:kafka-get-offsets.sh",
+  "process:kafka-broker-api-versions.sh",
+  "process:kafka-metadata-quorum.sh",
+  "process:kafka-run-class.sh",
+  "process:kcat",
+  "process:java",
+  "net:downloads.apache.org",
+  "net:archive.apache.org",
+  "clipboard",
+]
+
+[[contributes.views]]
+id = "explorer"
+title = "Kafka"
+icon = "icon.svg"
+location = "right"
+group = "kafka"
+detail = true
+
+[[contributes.views]]
+id = "topics"
+title = "Topics"
+location = "bottom"
+group = "kafka"
+
+[[contributes.views]]
+id = "messages"
+title = "Messages"
+location = "bottom"
+group = "kafka"
+
+[[contributes.views]]
+id = "connections"
+title = "Connections"
+location = "bottom"
+group = "kafka"
+
+[[contributes.views]]
+id = "brokers"
+title = "Brokers"
+location = "bottom"
+group = "kafka"
+
+[[contributes.views]]
+id = "groups"
+title = "Consumer Groups"
+location = "bottom"
+group = "kafka"
+
+[[contributes.views]]
+id = "install"
+title = "Kafka CLI"
+location = "bottom"
+group = "kafka"
 
 [[contributes.commands]]
-id = "say-hello"
-title = "Kafka: Say Hello"
+id = "open"
+title = "Kafka: Open Explorer"
 category = "Kafka"
 
 [[contributes.commands]]
-id = "line-count"
-title = "Kafka: Line Count of Active File"
+id = "refresh"
+title = "Kafka: Refresh Cluster"
 category = "Kafka"
+
+[[contributes.commands]]
+id = "connections"
+title = "Kafka: Manage Connections"
+category = "Kafka"
+
+[[contributes.commands]]
+id = "connection-new"
+title = "Kafka: New Connection"
+category = "Kafka"
+
+[[contributes.commands]]
+id = "connection-edit"
+title = "Kafka: Edit Connection"
+category = "Kafka"
+
+[[contributes.commands]]
+id = "connection-test"
+title = "Kafka: Test Connection"
+category = "Kafka"
+
+[[contributes.commands]]
+id = "connection-delete"
+title = "Kafka: Delete Connection"
+category = "Kafka"
+
+[[contributes.commands]]
+id = "connection-activate"
+title = "Kafka: Activate Connection"
+category = "Kafka"
+
+[[contributes.commands]]
+id = "connection-save"
+title = "Kafka: Test and Save Connection"
+category = "Kafka"
+
+[[contributes.commands]]
+id = "install-backend"
+title = "Kafka: Download and Install the Apache Kafka CLI"
+category = "Kafka"
+
+[[contributes.commands]]
+id = "check-backend"
+title = "Kafka: Verify CLI Installation"
+category = "Kafka"
+
+[[contributes.commands]]
+id = "refresh-catalog"
+title = "Kafka: Refresh Version Catalog"
+category = "Kafka"
+
+[[contributes.commands]]
+id = "copy-paths"
+title = "Kafka: Copy Script Paths"
+category = "Kafka"
+
+[[contributes.commands]]
+id = "topics"
+title = "Kafka: List Topics"
+category = "Kafka"
+
+[[contributes.commands]]
+id = "topic-create"
+title = "Kafka: Create Topic"
+category = "Kafka"
+
+[[contributes.commands]]
+id = "topic-delete"
+title = "Kafka: Delete Topic"
+category = "Kafka"
+
+[[contributes.commands]]
+id = "topic-details"
+title = "Kafka: Topic Details"
+category = "Kafka"
+
+[[contributes.commands]]
+id = "partitions"
+title = "Kafka: Topic Partitions"
+category = "Kafka"
+
+[[contributes.commands]]
+id = "consume"
+title = "Kafka: Consume Messages"
+category = "Kafka"
+
+[[contributes.commands]]
+id = "consume-live"
+title = "Kafka: Follow Messages Live"
+category = "Kafka"
+
+[[contributes.commands]]
+id = "publish"
+title = "Kafka: Publish Message"
+category = "Kafka"
+
+[[contributes.commands]]
+id = "messages"
+title = "Kafka: Open Message Viewer"
+category = "Kafka"
+
+[[contributes.commands]]
+id = "clear-messages"
+title = "Kafka: Clear Messages"
+category = "Kafka"
+
+[[contributes.commands]]
+id = "brokers"
+title = "Kafka: List Brokers"
+category = "Kafka"
+
+[[contributes.commands]]
+id = "groups"
+title = "Kafka: List Consumer Groups"
+category = "Kafka"
+
+[[contributes.commands]]
+id = "group-details"
+title = "Kafka: Consumer Group Lag"
+category = "Kafka"
+
+[[contributes.commands]]
+id = "group-lag"
+title = "Kafka: Group Offsets and Lag"
+category = "Kafka"
+
+[[contributes.menus]]
+menu = "tools"
+command = "open"
+
+[[contributes.menus]]
+menu = "tools"
+command = "install-backend"
+
+[[contributes.statusBar]]
+id = "kafka"
+text = "Kafka"
+tooltip = "Kafka: open the explorer"
+command = "open"
+
+[contributes.settings]
+schema = "settings.schema.json"

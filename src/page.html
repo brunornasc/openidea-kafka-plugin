@@ -1,0 +1,295 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<style>
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    color: var(--openidea-fg);
+    background: var(--openidea-bg, transparent);
+    font-family: var(--openidea-font-ui, system-ui, sans-serif);
+    font-size: 12px;
+  }
+  .app {
+    display: grid;
+    grid-template-rows: auto auto minmax(0, 1fr) auto;
+    gap: 8px;
+    height: calc(100vh - 16px);
+    padding: 8px;
+  }
+  .bar, .row { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+  .bar label { color: var(--openidea-fg-muted); white-space: nowrap; }
+  input, select, textarea {
+    font-family: inherit;
+    font-size: 12px;
+    color: var(--openidea-fg);
+    background: var(--openidea-bg-input, transparent);
+    border: 1px solid var(--openidea-border);
+    border-radius: 4px;
+    padding: 4px 6px;
+    outline: none;
+  }
+  input:focus, select:focus, textarea:focus { border-color: var(--openidea-focus-ring, var(--openidea-accent)); }
+  input[type="text"], input[type="number"], select { min-width: 0; }
+  .grow { flex: 1; min-width: 90px; }
+  button {
+    font-family: inherit;
+    font-size: 12px;
+    color: var(--openidea-fg);
+    background: var(--openidea-bg-elevated, transparent);
+    border: 1px solid var(--openidea-border);
+    border-radius: 4px;
+    padding: 4px 9px;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  button:hover:not(:disabled) { background: var(--openidea-bg-hover); }
+  button.primary { border-color: var(--openidea-accent); }
+  .section {
+    border: 1px solid var(--openidea-border);
+    border-radius: 6px;
+    padding: 8px;
+    min-height: 0;
+    display: grid;
+    gap: 6px;
+  }
+  .section h2 { margin: 0; font-size: 12px; font-weight: 600; }
+  .hint { color: var(--openidea-fg-muted); font-size: 11px; }
+  #status { color: var(--openidea-fg-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #list { overflow: auto; min-height: 0; display: grid; gap: 4px; align-content: start; }
+  .msg {
+    border: 1px solid var(--openidea-border);
+    border-radius: 4px;
+    padding: 5px 7px;
+    cursor: pointer;
+    display: grid;
+    grid-template-columns: auto auto auto 1fr;
+    gap: 8px;
+    align-items: baseline;
+  }
+  .msg:hover { background: var(--openidea-bg-hover); }
+  .meta { color: var(--openidea-fg-muted); font-variant-numeric: tabular-nums; }
+  .value { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--openidea-font-mono, monospace); }
+  .detail { grid-column: 1 / -1; display: none; white-space: pre-wrap; word-break: break-all; font-family: var(--openidea-font-mono, monospace); margin-top: 4px; border-top: 1px solid var(--openidea-border); padding-top: 4px; }
+  .msg.open .detail { display: block; }
+  .error { color: var(--openidea-danger, #e06c75); }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+  .grid2 label { display: grid; gap: 2px; }
+  textarea { width: 100%; min-height: 44px; resize: vertical; }
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="row">
+    <strong data-i18n>Kafka · Messages</strong>
+    <span id="conn" class="hint"></span>
+    <span id="status"></span>
+    <span class="grow"></span>
+    <button id="refresh" data-i18n>State</button>
+    <button id="clear" data-i18n>Clear</button>
+  </div>
+
+  <div class="section">
+    <div class="row">
+      <label><span data-i18n>Topic</span> <select id="topic" class="grow"></select></label>
+      <label><span data-i18n>Start</span>
+        <select id="start">
+          <option value="end" data-i18n>End (new)</option>
+          <option value="beginning" data-i18n>Beginning</option>
+          <option value="offset" data-i18n>Offset</option>
+        </select>
+      </label>
+      <label><span data-i18n>Offset</span> <input id="offset" type="text" size="8" data-i18n-ph="Offset" placeholder="Offset"></label>
+      <label><span data-i18n>Partition</span> <input id="partition" type="text" size="5" data-i18n-ph="all" placeholder="all"></label>
+      <label><span data-i18n>Limit</span> <input id="limit" type="number" min="1" max="5000" style="width:70px"></label>
+      <button id="consume" class="primary" data-i18n>Consume</button>
+      <button id="live" data-i18n>Live</button>
+    </div>
+    <div class="row">
+      <input id="filterText" type="text" class="grow" data-i18n-ph="Search in value" placeholder="Search in value">
+      <input id="filterKey" type="text" class="grow" data-i18n-ph="Search in key" placeholder="Search in key">
+      <input id="filterHeader" type="text" class="grow" data-i18n-ph="Search in headers" placeholder="Search in headers">
+      <label><input id="caseSensitive" type="checkbox"> Aa</label>
+    </div>
+    <div class="row">
+      <input id="offsetFrom" type="text" size="7" data-i18n-ph="offset ≥" placeholder="offset ≥">
+      <input id="offsetTo" type="text" size="7" data-i18n-ph="offset ≤" placeholder="offset ≤">
+      <input id="timeFrom" type="text" size="12" data-i18n-ph="ts ≥ (ms)" placeholder="ts ≥ (ms)">
+      <input id="timeTo" type="text" size="12" data-i18n-ph="ts ≤ (ms)" placeholder="ts ≤ (ms)">
+      <button id="applyFilters" data-i18n>Filter</button>
+      <span id="count" class="hint"></span>
+    </div>
+  </div>
+
+  <div class="section">
+    <h2><span data-i18n>Messages</span> <span id="error" class="error"></span></h2>
+    <div id="list"></div>
+  </div>
+
+  <div class="section">
+    <h2 data-i18n>Publish message</h2>
+    <div class="grid2">
+      <label><span data-i18n>Key</span> <input id="pubKey" type="text" data-i18n-ph="optional" placeholder="optional"></label>
+      <label><span data-i18n>Partition</span> <input id="pubPartition" type="text" data-i18n-ph="automatic (requires kcat)" placeholder="automatic (requires kcat)"></label>
+    </div>
+    <label><span data-i18n>Headers (key=value, …)</span> <input id="pubHeaders" type="text" data-i18n-ph="trace=abc,tenant=acme" placeholder="trace=abc,tenant=acme"></label>
+    <textarea id="pubValue" data-i18n-ph="Message value" placeholder="Message value"></textarea>
+    <div class="row">
+      <button id="publish" class="primary" data-i18n>Publish</button>
+      <span class="hint" data-i18n>Passwords never pass through the plugin: use the connection's .properties file.</span>
+    </div>
+  </div>
+</div>
+
+<script>
+(function () {
+  const $ = (id) => document.getElementById(id);
+  const post = (message) => openidea.postMessage(JSON.stringify(message));
+  let state = { prefs: {}, messages: [], topics: [], connections: [], active: null, i18n: {} };
+
+  const T = (text) => (state.i18n && Object.prototype.hasOwnProperty.call(state.i18n, text) && state.i18n[text]) || text;
+  const TF = (text, values) => {
+    let out = T(text);
+    for (const [key, value] of Object.entries(values)) out = out.split('{' + key + '}').join(String(value));
+    return out;
+  };
+
+  function applyI18n() {
+    document.querySelectorAll('[data-i18n]').forEach((el) => {
+      const en = el.dataset.i18n || el.textContent.trim();
+      el.dataset.i18n = en;
+      el.textContent = T(en);
+    });
+    document.querySelectorAll('[data-i18n-ph]').forEach((el) => {
+      const en = el.dataset.i18nPh || el.placeholder;
+      el.dataset.i18nPh = en;
+      el.placeholder = T(en);
+    });
+    document.documentElement.lang = (state.i18n && Object.keys(state.i18n).length) ? 'pt-BR' : 'en';
+  }
+
+  const prefsFromForm = () => ({
+    topic: $('topic').value,
+    partition: $('partition').value,
+    start: $('start').value,
+    offset: $('offset').value,
+    limit: Number($('limit').value) || 200,
+    filterText: $('filterText').value,
+    filterKey: $('filterKey').value,
+    filterHeader: $('filterHeader').value,
+    offsetFrom: $('offsetFrom').value,
+    offsetTo: $('offsetTo').value,
+    timeFrom: $('timeFrom').value,
+    timeTo: $('timeTo').value,
+    caseSensitive: $('caseSensitive').checked,
+  });
+
+  const esc = (s) => String(s == null ? '' : s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+
+  function fillTopics(selected) {
+    const sel = $('topic');
+    sel.innerHTML = '';
+    const topics = state.topics || [];
+    if (!topics.length) {
+      const o = document.createElement('option');
+      o.value = ''; o.textContent = T('(no topics — refresh the cluster)');
+      sel.appendChild(o);
+    }
+    for (const t of topics) {
+      const o = document.createElement('option');
+      o.value = t; o.textContent = t;
+      sel.appendChild(o);
+    }
+    if (selected && topics.indexOf(selected) >= 0) sel.value = selected;
+    else if (!topics.length) sel.value = '';
+  }
+
+  function render(s) {
+    state = s || state;
+    applyI18n();
+    const p = state.prefs || {};
+    fillTopics(p.topic || $('topic').value);
+    $('partition').value = p.partition || '';
+    $('start').value = p.start || 'end';
+    $('offset').value = p.offset || '';
+    $('limit').value = p.limit || 200;
+    $('filterText').value = p.filterText || '';
+    $('filterKey').value = p.filterKey || '';
+    $('filterHeader').value = p.filterHeader || '';
+    $('offsetFrom').value = p.offsetFrom || '';
+    $('offsetTo').value = p.offsetTo || '';
+    $('timeFrom').value = p.timeFrom || '';
+    $('timeTo').value = p.timeTo || '';
+    $('caseSensitive').checked = !!p.caseSensitive;
+    const active = (state.connections || []).find((c) => c.id === state.active);
+    $('conn').textContent = active ? (active.name + ' · ' + active.bootstrap) : T('no active connection');
+    $('status').textContent = state.status || '';
+    $('error').textContent = state.error || '';
+    $('count').textContent = TF('{shown} of {kept} shown · {total} read', {
+      shown: state.shown || 0, kept: state.kept || 0, total: state.total || 0,
+    });
+    const list = $('list');
+    list.innerHTML = '';
+    for (const m of state.messages || []) {
+      const div = document.createElement('div');
+      div.className = 'msg';
+      const headers = (m.headers || []).map((h) => h.key + '=' + (h.value == null ? '∅' : h.value)).join(', ');
+      const date = m.timestamp ? new Date(m.timestamp).toISOString().replace('T', ' ').replace('Z', '') : '-';
+      div.innerHTML =
+        '<span class="meta">p' + esc(m.partition) + ' · #' + esc(m.offset) + '</span>' +
+        '<span class="meta">' + esc(date) + '</span>' +
+        '<span class="meta">' + esc(m.key == null ? '∅' : m.key) + '</span>' +
+        '<span class="value">' + esc(m.value == null ? '∅' : m.value) + '</span>' +
+        '<div class="detail">' + esc(TF('topic: {topic}', { topic: m.topic })) +
+        '\n' + esc(TF('timestamp type: {type}', { type: m.timestampType })) +
+        '\n' + esc(TF('headers: {headers}', { headers: headers || '-' })) +
+        '\n' + esc(TF('key: {key}', { key: m.key == null ? '∅' : m.key })) +
+        '\n' + esc(T('value:')) + '\n' + esc(m.value == null ? '∅' : m.value) + '</div>';
+      div.addEventListener('click', () => div.classList.toggle('open'));
+      list.appendChild(div);
+    }
+    if (!(state.messages || []).length) {
+      const empty = document.createElement('div');
+      empty.className = 'hint';
+      empty.textContent = T('No messages. Choose a topic and click Consume.');
+      list.appendChild(empty);
+    }
+  }
+
+  const sendPrefs = (action) => post(Object.assign({ action: action }, prefsFromForm()));
+
+  $('refresh').addEventListener('click', () => post({ action: 'state' }));
+  $('clear').addEventListener('click', () => post({ action: 'clear' }));
+  $('consume').addEventListener('click', () => sendPrefs('consume'));
+  $('applyFilters').addEventListener('click', () => sendPrefs('prefs'));
+  $('live').addEventListener('click', () => { sendPrefs('prefs'); post({ action: 'live' }); });
+  $('publish').addEventListener('click', () => post({
+    action: 'publish',
+    topic: $('topic').value,
+    key: $('pubKey').value,
+    value: $('pubValue').value,
+    headers: $('pubHeaders').value,
+    partition: $('pubPartition').value,
+  }));
+  $('topic').addEventListener('change', () => post({ action: 'prefs', topic: $('topic').value }));
+  for (const id of ['filterText', 'filterKey', 'filterHeader', 'offsetFrom', 'offsetTo', 'timeFrom', 'timeTo']) {
+    $(id).addEventListener('change', () => sendPrefs('prefs'));
+  }
+
+  openidea.onMessage((raw) => {
+    try {
+      const msg = JSON.parse(raw);
+      if (msg.kind === 'state') render(msg);
+    } catch (e) { /* unknown message */ }
+  });
+
+  const initial = "__START__";
+  render(initial);
+  post({ action: 'state' });
+})();
+</script>
+</body>
+</html>
