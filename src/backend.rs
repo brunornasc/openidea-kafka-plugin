@@ -900,6 +900,17 @@ pub fn publish(c: &Connection, msg: &PublishMessage) -> Result<(), Error> {
     if msg.topic.trim().is_empty() {
         return Err(i18n::t("Choose a topic to publish to.").into());
     }
+    // O console producer entrega `String` ao serializador; ByteArraySerializer
+    // espera `byte[]` e falharia com um ClassCastException obscurecido.
+    if configured_serde(Tool::Producer)
+        .iter()
+        .any(|(_, class)| class.rsplit('.').next() == Some("ByteArraySerializer"))
+    {
+        return Err(i18n::t(
+            "ByteArraySerializer expects byte[], but the publish form sends text. Leave the serializer empty (String) or use a custom class that encodes the text.",
+        )
+        .into());
+    }
     if msg.partition.is_some() {
         return publish_with_kcat(c, msg);
     }
@@ -1358,6 +1369,25 @@ mod tests {
         )
         .unwrap();
         list_topics(&c).unwrap();
+    }
+
+    #[test]
+    fn byte_array_serializer_is_rejected_with_a_clear_message() {
+        let host = crate::mock_host();
+        host.set_setting(
+            "valueSerializer",
+            r#""org.apache.kafka.common.serialization.ByteArraySerializer""#,
+        );
+        let err = publish(
+            &connection(),
+            &PublishMessage {
+                topic: "t".into(),
+                value: "v".into(),
+                ..PublishMessage::default()
+            },
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("expects byte[]"), "{err}");
     }
 
     #[test]

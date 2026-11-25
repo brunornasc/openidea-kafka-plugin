@@ -295,5 +295,6 @@
   "Kafka: {program}": "Kafka: {program}",
   "New cluster": "Novo cluster",
   "Kafka ready.": "Kafka pronto.",
-  "Kafka: cancelled.": "Kafka: cancelado."
+  "Kafka: cancelled.": "Kafka: cancelado.",
+  "ByteArraySerializer expects byte[], but the publish form sends text. Leave the serializer empty (String) or use a custom class that encodes the text.": "ByteArraySerializer espera byte[], mas o formulário de publicação envia texto. Deixe o serializador vazio (String) ou use uma classe customizada que codifique o texto."
 }
