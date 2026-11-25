@@ -553,6 +553,30 @@ pub fn setting_bool(key: &str, default: bool) -> bool {
     host::setting_bool(key).unwrap_or(default)
 }
 
+// Console (de)serialization is client-side: a topic does not store the class
+// name. Empty means "let the Kafka CLI choose its default" (String on the
+// console tools, backed by byte arrays on the wire).
+pub fn key_deserializer() -> String {
+    setting_str("keyDeserializer", "").trim().into()
+}
+
+pub fn value_deserializer() -> String {
+    setting_str("valueDeserializer", "").trim().into()
+}
+
+pub fn key_serializer() -> String {
+    setting_str("keySerializer", "").trim().into()
+}
+
+pub fn value_serializer() -> String {
+    setting_str("valueSerializer", "").trim().into()
+}
+
+/// Optional jars/directories appended to `java -cp`, for custom serde classes.
+pub fn extra_classpath() -> String {
+    setting_str("extraClasspath", "").trim().into()
+}
+
 pub fn max_messages() -> u32 {
     setting_num("maxMessages", 200.0).clamp(1.0, 5000.0) as u32
 }

@@ -230,9 +230,15 @@ fn run(program: &str, args: &[String], stdin: Option<&str>) -> Result<ProcessOut
 /// sistema, mantendo compatibilidade com quem já apontou as capacidades.
 fn java_command(tool: Tool, args: &[String]) -> Option<(String, Vec<String>)> {
     let info = config::install_info()?;
+    let mut classpath = format!("{}/libs/*", info.dir.trim_end_matches('/'));
+    let extra = config::extra_classpath();
+    if !extra.is_empty() {
+        classpath.push(':');
+        classpath.push_str(&extra);
+    }
     let mut out = vec![
         "-cp".into(),
-        format!("{}/libs/*", info.dir.trim_end_matches('/')),
+        classpath,
         tool.main_class(&info.version).into(),
     ];
     out.extend(args.iter().cloned());
@@ -432,6 +438,27 @@ fn properties_path(c: &Connection) -> Result<Option<String>, Error> {
     Ok(Some(path))
 }
 
+/// Classes de (de)serialização configuradas nas preferências. O tópico não
+/// guarda essa informação: ela é uma escolha do cliente (console tools).
+fn configured_serde(tool: Tool) -> Vec<(String, String)> {
+    let pairs: Vec<(&str, String)> = match tool {
+        Tool::Consumer => vec![
+            ("key.deserializer", config::key_deserializer()),
+            ("value.deserializer", config::value_deserializer()),
+        ],
+        Tool::Producer => vec![
+            ("key.serializer", config::key_serializer()),
+            ("value.serializer", config::value_serializer()),
+        ],
+        _ => Vec::new(),
+    };
+    pairs
+        .into_iter()
+        .filter(|(_, value)| !value.is_empty())
+        .map(|(key, value)| (key.into(), value))
+        .collect()
+}
+
 /// `--command-config` / `--*.config` e propriedades extras não sensíveis.
 fn client_props(c: &Connection, tool: Tool, modern: bool) -> Result<Vec<String>, Error> {
     let mut out = Vec::new();
@@ -454,7 +481,14 @@ fn client_props(c: &Connection, tool: Tool, modern: bool) -> Result<Vec<String>,
         _ => "",
     };
     if !property_flag.is_empty() {
-        for (key, value) in c.java_properties() {
+        // Extra properties in the connection win over the global setting.
+        let mut props = c.java_properties();
+        for (key, value) in configured_serde(tool) {
+            if !props.iter().any(|(k, _)| k == &key) {
+                props.push((key, value));
+            }
+        }
+        for (key, value) in props {
             out.push(property_flag.into());
             out.push(format!("{key}={value}"));
         }
@@ -1264,6 +1298,65 @@ mod tests {
             assert!(!args.iter().any(|a| a.contains("security.protocol=")));
             ok("t\n")
         });
+        list_topics(&c).unwrap();
+    }
+
+    #[test]
+    fn configured_serde_classes_are_passed_only_to_console_tools() {
+        let host = crate::mock_host();
+        host.set_setting("keyDeserializer", r#""org.example.KeyDeserializer""#);
+        host.set_setting("valueDeserializer", r#""org.example.ValueDeserializer""#);
+        host.set_setting("keySerializer", r#""org.example.KeySerializer""#);
+        host.set_setting("valueSerializer", r#""org.example.ValueSerializer""#);
+        let c = connection();
+
+        host.on_process(CONSUMER, |args, _| {
+            assert!(args.iter().any(|a| a == "--command-property"));
+            assert!(
+                args.iter()
+                    .any(|a| a == "key.deserializer=org.example.KeyDeserializer")
+            );
+            assert!(
+                args.iter()
+                    .any(|a| a == "value.deserializer=org.example.ValueDeserializer")
+            );
+            ok("")
+        });
+        host.on_process(PRODUCER, |args, _| {
+            assert!(args.iter().any(|a| a == "--command-property"));
+            assert!(
+                args.iter()
+                    .any(|a| a == "key.serializer=org.example.KeySerializer")
+            );
+            assert!(
+                args.iter()
+                    .any(|a| a == "value.serializer=org.example.ValueSerializer")
+            );
+            ok("")
+        });
+        host.on_process(TOPICS, |args, _| {
+            assert!(!args.iter().any(|a| a.contains("deserializer=")));
+            assert!(!args.iter().any(|a| a.contains("serializer=")));
+            ok("t\n")
+        });
+
+        consume(
+            &c,
+            &ConsumeOptions {
+                topic: "t".into(),
+                ..ConsumeOptions::default()
+            },
+        )
+        .unwrap();
+        publish(
+            &c,
+            &PublishMessage {
+                topic: "t".into(),
+                value: "v".into(),
+                ..PublishMessage::default()
+            },
+        )
+        .unwrap();
         list_topics(&c).unwrap();
     }
 

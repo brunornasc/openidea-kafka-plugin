@@ -41,6 +41,36 @@
       "type": "boolean",
       "title": "Reload cluster metadata every minute",
       "default": false
+    },
+    "keyDeserializer": {
+      "type": "string",
+      "title": "Key deserializer class",
+      "description": "Java class used by ConsoleConsumer to decode keys; leave empty for the Kafka CLI default.",
+      "default": ""
+    },
+    "valueDeserializer": {
+      "type": "string",
+      "title": "Value deserializer class",
+      "description": "Java class used by ConsoleConsumer to decode values; leave empty for the Kafka CLI default.",
+      "default": ""
+    },
+    "keySerializer": {
+      "type": "string",
+      "title": "Key serializer class",
+      "description": "Java class used by ConsoleProducer to encode keys; leave empty for the Kafka CLI default.",
+      "default": ""
+    },
+    "valueSerializer": {
+      "type": "string",
+      "title": "Value serializer class",
+      "description": "Java class used by ConsoleProducer to encode values; leave empty for the Kafka CLI default.",
+      "default": ""
+    },
+    "extraClasspath": {
+      "type": "string",
+      "title": "Extra Java classpath",
+      "description": "Jars/directories appended to -cp for custom (de)serializers; use ':' on Linux/macOS or ';' on Windows.",
+      "default": ""
     }
   }
 }

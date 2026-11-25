@@ -42,6 +42,16 @@
   "Read timeout (ms)": "Timeout das leituras (ms)",
   "Messages kept in the viewer": "Mensagens mantidas no visualizador",
   "Reload cluster metadata every minute": "Recarregar metadados a cada minuto",
+  "Key deserializer class": "Classe deserializadora de chave",
+  "Java class used by ConsoleConsumer to decode keys; leave empty for the Kafka CLI default.": "Classe Java usada pelo ConsoleConsumer para decodificar chaves; deixe vazio para usar o padrão da CLI do Kafka.",
+  "Value deserializer class": "Classe deserializadora de valor",
+  "Java class used by ConsoleConsumer to decode values; leave empty for the Kafka CLI default.": "Classe Java usada pelo ConsoleConsumer para decodificar valores; deixe vazio para usar o padrão da CLI do Kafka.",
+  "Key serializer class": "Classe serializadora de chave",
+  "Java class used by ConsoleProducer to encode keys; leave empty for the Kafka CLI default.": "Classe Java usada pelo ConsoleProducer para codificar chaves; deixe vazio para usar o padrão da CLI do Kafka.",
+  "Value serializer class": "Classe serializadora de valor",
+  "Java class used by ConsoleProducer to encode values; leave empty for the Kafka CLI default.": "Classe Java usada pelo ConsoleProducer para codificar valores; deixe vazio para usar o padrão da CLI do Kafka.",
+  "Extra Java classpath": "Classpath Java adicional",
+  "Jars/directories appended to -cp for custom (de)serializers; use ':' on Linux/macOS or ';' on Windows.": "Jars/diretórios acrescentados a -cp para (de)serializadores customizados; use ':' no Linux/macOS ou ';' no Windows.",
   "Refresh": "Atualizar",
   "New Connection": "Nova conexão",
   "Install CLI": "Instalar CLI",
@@ -282,5 +292,8 @@
   "Apache Kafka {version} installed in {dir}.\n\nThe plugin runs it directly with java -cp {dir}/libs/*, so you only need the process:java capability — no script re-approval. If process:java was not granted, enable it in Settings › Plugins › Kafka › Capabilities. Scripts (optional fallback):\n{scripts}\n\nJava 17+ (Kafka 4.x) on the PATH is required.": "Apache Kafka {version} instalado em {dir}.\n\nO plugin executa diretamente com java -cp {dir}/libs/*, então você só precisa da capacidade process:java — sem reaprovar scripts. Se process:java não foi concedida, habilite-a em Settings › Plugins › Kafka › Capacidades. Scripts (fallback opcional):\n{scripts}\n\nÉ necessário Java 17+ (Kafka 4.x) no PATH.",
   "Installed in {dir}. The CLI runs directly with process:java and {bin}/../libs. Script capabilities are only needed for a Kafka installed outside the plugin.": "Instalado em {dir}. A CLI é executada diretamente com process:java e {bin}/../libs. Capacidades de script só são necessárias para um Kafka instalado fora do plugin.",
   "The process:java capability is not granted. Java is on the PATH, but OpenIDEA still needs it approved in Settings › Plugins › Kafka › Capabilities to run the installed Kafka distribution.": "A capacidade process:java não foi concedida. O Java está no PATH, mas o OpenIDEA precisa aprová-la em Settings › Plugins › Kafka › Capacidades para executar a distribuição Kafka instalada.",
-  "Kafka: {program}": "Kafka: {program}"
+  "Kafka: {program}": "Kafka: {program}",
+  "New cluster": "Novo cluster",
+  "Kafka ready.": "Kafka pronto.",
+  "Kafka: cancelled.": "Kafka: cancelado."
 }

@@ -23,7 +23,8 @@ use openidea_plugin::views::{
     Body, Button, Field, FieldValue, Table, TableSort, TreeItem, View, ViewEvent, Viewport, Views,
 };
 use openidea_plugin::{
-    Error, Event, EventKind, Invocation, NotificationLevel, PickItem, Plugin, register_plugin,
+    Error, Event, EventKind, Invocation, NotificationLevel, PickItem, Plugin, StatusItem,
+    register_plugin,
 };
 use serde_json::{Value, json};
 use std::collections::BTreeSet;
@@ -45,6 +46,9 @@ const ALL_VIEWS: [&str; 7] = [
     INSTALL,
 ];
 const PAGE: &str = include_str!("page.html");
+/// The status-bar contribution declared in `plugin.toml`; the plugin replaces
+/// its label/tooltip with the outcome of the last command.
+const STATUS_ID: &str = "kafka";
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 enum Selection {
@@ -179,6 +183,41 @@ impl Kafka {
         self.status = message.into();
     }
 
+    /// Persistent feedback in the status bar. Notifications can be hidden by
+    /// the IDE; the chip stays until the next command.
+    fn report_result(&mut self, result: &Result<Option<String>, Error>) {
+        let (mark, tooltip, show_in_view) = match result {
+            Ok(Some(text)) => ("✓", text.clone(), true),
+            Ok(None) => ("•", i18n::t("Kafka ready."), false),
+            Err(Error::Cancelled) => ("•", i18n::t("Kafka: cancelled."), true),
+            Err(e) => ("✗", e.to_string(), true),
+        };
+        host::set_status_item(
+            STATUS_ID,
+            &StatusItem {
+                text: format!("Kafka {mark}"),
+                tooltip: Some(tooltip.clone()),
+                command: Some("open".into()),
+            },
+        );
+        if show_in_view {
+            self.note(tooltip);
+        }
+    }
+
+    /// Every command goes through here so view buttons and palette commands
+    /// get the same success/failure chip.
+    fn run(
+        &mut self,
+        id: &str,
+        ctx: &Invocation,
+        arg: Option<&str>,
+    ) -> Result<Option<String>, Error> {
+        let result = self.command(id, ctx, arg);
+        self.report_result(&result);
+        result
+    }
+
     // ------------------------------------------------------------- dados auxiliares
 
     fn choose_topic(&mut self, arg: Option<&str>) -> Result<String, Error> {
@@ -268,7 +307,7 @@ impl Kafka {
                 Ok(None)
             }
             "connection-new" => {
-                self.draft = Some(Connection::new("", "Novo cluster"));
+                self.draft = Some(Connection::new("", &i18n::t("New cluster")));
                 host::reveal_view(CONNECTIONS)?;
                 host::refresh_view(CONNECTIONS);
                 Ok(None)
@@ -345,12 +384,15 @@ impl Kafka {
                 config::upsert(profile.clone())?;
                 config::set_active(&profile.id);
                 self.draft = None;
-                let _ = self.reload();
-                Self::refresh_all();
                 let text = i18n::tf(
                     "Connection {name} saved and activated ({count} topics found).",
                     &[("name", &profile.name), ("count", &count.to_string())],
                 );
+                let _ = self.reload();
+                // `reload` sets the cluster summary; the last action wins in
+                // the view so the save result is actually visible.
+                self.note(text.clone());
+                Self::refresh_all();
                 host::notify(NotificationLevel::Info, "Kafka", &text);
                 Ok(Some(text))
             }
@@ -698,6 +740,8 @@ impl Plugin for Kafka {
         // Metadados são um cache: falhas (CLI ainda não instalada) não impedem
         // a ativação — a view explica como instalar.
         let _ = self.reload();
+        let ready: Result<Option<String>, Error> = Ok(None);
+        self.report_result(&ready);
         Ok(())
     }
 
@@ -707,7 +751,7 @@ impl Plugin for Kafka {
         ctx: &Invocation,
         arg: Option<&str>,
     ) -> Result<Option<String>, Error> {
-        self.command(id, ctx, arg)
+        self.run(id, ctx, arg)
     }
 
     fn handle_events(&mut self, events: &[Event], _ctx: &Invocation) {
@@ -905,7 +949,7 @@ impl Kafka {
         let activating = matches!(&event, ViewEvent::Activate(_));
         match event {
             ViewEvent::Button(id) => {
-                let _ = self.command(&id, ctx, None);
+                let _ = self.run(&id, ctx, None);
                 host::refresh_view(EXPLORER);
             }
             ViewEvent::Expand(key) => {
@@ -1006,7 +1050,7 @@ impl Kafka {
                 .contains(&id.as_str())
                 .then_some(name)
                 .flatten();
-                let result = self.command(&id, ctx, arg.as_deref());
+                let result = self.run(&id, ctx, arg.as_deref());
                 if let Err(e) = result {
                     host::notify(NotificationLevel::Error, "Kafka", &e.to_string());
                 }
@@ -1052,7 +1096,7 @@ impl Kafka {
                 } else {
                     let arg = (id == "consume-live" && !self.prefs.topic.is_empty())
                         .then(|| self.prefs.topic.clone());
-                    let result = self.command(&id, ctx, arg.as_deref());
+                    let result = self.run(&id, ctx, arg.as_deref());
                     if let Err(e) = result {
                         host::notify(NotificationLevel::Error, "Kafka", &e.to_string());
                     }
@@ -1189,7 +1233,7 @@ impl Kafka {
                 host::refresh_view(CONNECTIONS);
             }
             ViewEvent::Button(id) => {
-                let result = self.command(&id, ctx, None);
+                let result = self.run(&id, ctx, None);
                 if let Err(e) = result {
                     host::notify(NotificationLevel::Error, "Kafka", &e.to_string());
                 }
@@ -1301,7 +1345,7 @@ impl Kafka {
                     Selection::Group(g) => Some(g.clone()),
                     _ => None,
                 };
-                let result = self.command(&id, ctx, group.as_deref());
+                let result = self.run(&id, ctx, group.as_deref());
                 if let Err(e) = result {
                     host::notify(NotificationLevel::Error, "Kafka", &e.to_string());
                 }
@@ -1408,7 +1452,7 @@ impl Kafka {
         view: &str,
     ) -> Result<(), Error> {
         if let ViewEvent::Button(id) = event {
-            let result = self.command(id, ctx, None);
+            let result = self.run(id, ctx, None);
             if let Err(e) = result {
                 host::notify(NotificationLevel::Error, "Kafka", &e.to_string());
             }
@@ -2038,6 +2082,45 @@ mod tests {
             host.process_runs()
                 .iter()
                 .any(|r| r.args.contains(&"--list".to_owned()))
+        );
+    }
+
+    #[test]
+    fn command_results_update_the_status_chip() {
+        let host = host_with_cluster();
+        let mut plugin = Kafka::default();
+        plugin.activate(&host.context("brunornasc.kafka")).unwrap();
+        assert_eq!(host.status_items()["kafka"].text, "Kafka •");
+
+        plugin.draft = Some(Connection::new("local", "Local"));
+        plugin.draft.as_mut().unwrap().bootstrap_servers = "localhost:9092".into();
+        let out = plugin
+            .run_command("connection-save", &host.invocation(), None)
+            .unwrap()
+            .unwrap();
+        let saved = &host.status_items()["kafka"];
+        assert_eq!(saved.text, "Kafka ✓");
+        assert!(
+            saved
+                .tooltip
+                .as_deref()
+                .unwrap_or("")
+                .contains("saved and activated"),
+            "{saved:?}"
+        );
+        assert_eq!(plugin.status, out);
+
+        let failed = plugin.run_command("not-a-command", &host.invocation(), None);
+        assert!(failed.is_err());
+        let failed = &host.status_items()["kafka"];
+        assert_eq!(failed.text, "Kafka ✗");
+        assert!(
+            failed
+                .tooltip
+                .as_deref()
+                .unwrap_or("")
+                .contains("Unknown command"),
+            "{failed:?}"
         );
     }
 

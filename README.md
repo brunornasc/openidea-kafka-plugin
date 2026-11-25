@@ -219,13 +219,35 @@ the rest keeps working.
 
 `settings.schema.json`: `language`, `kafkaVersion`, `downloadUrl` (template
 with `{version}`), `cliFlavour` (`auto` / `kafka3` / `kafka4`), `maxMessages`,
-`timeoutMs`, `keepMessages` and `autoRefresh`.
+`timeoutMs`, `keepMessages`, `autoRefresh`, `keyDeserializer`,
+`valueDeserializer`, `keySerializer`, `valueSerializer` and `extraClasspath`.
+
+The four serde settings take a Java class name and are passed to
+`ConsoleConsumer`/`ConsoleProducer` as `--command-property` (or
+`--consumer-property` / `--producer-property` on Kafka 3.x). Empty means the CLI default;
+an entry in the connection's **Extra properties** wins over the global setting.
+`extraClasspath` appends jars/directories to `java -cp` when a custom class is
+used. A topic does **not** store a serializer: it only holds bytes, so text
+published by this plugin is readable by a ByteArrayDeserializer consumer and
+vice versa. See "Binary payloads" below.
 
 `cliFlavour = auto` first tries Kafka 4.x flags (`--command-config`,
 `--command-property`, `--formatter-property`) and, if the CLI rejects an
 option, retries with the 3.x ones (`--consumer.config`, `--producer.config`,
 `--consumer-property`, `--producer-property`, `--property`). Pin `kafka3` or
 `kafka4` to skip detection.
+
+## Binary payloads
+
+The console tools are text-oriented. UTF-8 text works with any byte-based
+topic: Kafka does not attach a schema to the topic, so `StringSerializer` on
+publish and `ByteArrayDeserializer` on consume are compatible (the formatter
+decodes the bytes for display). Arbitrary binary payloads — Avro, Protobuf,
+packed records — need a matching deserializer **and** a formatter that can
+render it as text. Configure the class in `valueDeserializer` (and put its jar
+in `extraClasspath`), or consume outside the plugin with a proper schema-aware
+client. `ByteArraySerializer` is not useful for the plugin's publish form: the
+console producer feeds it a `String`, while that serializer expects `byte[]`.
 
 ## Known limitations
 
