@@ -1454,7 +1454,15 @@ pub fn check_backend() -> BackendStatus {
         ]
     };
     for program in programs {
-        let result = raw(program, &strings(&["--version"]), None);
+        // `kcat -V` é a única forma portátil de pedir a versão: `--version`
+        // é interpretado como opção desconhecida. Java aceita `-version`
+        // também no 8, enquanto `--version` só existe a partir do 9.
+        let flag = match program {
+            KCAT => "-V",
+            JAVA => "-version",
+            _ => "--version",
+        };
+        let result = raw(program, &strings(&[flag]), None);
         let state = match result {
             Ok(out) => {
                 let version = config::redact(&format!("{}\n{}", out.stdout, out.stderr))
@@ -1513,6 +1521,42 @@ mod tests {
             stdout: stdout.into(),
             stderr: String::new(),
         })
+    }
+
+    #[test]
+    fn the_backend_probe_uses_the_version_flag_each_tool_accepts() {
+        let host = crate::mock_host();
+        host.on_process(KCAT, |args, _| {
+            assert_eq!(args, &["-V".to_owned()]);
+            ok("kcat 1.7.0\n")
+        });
+        host.on_process(JAVA, |args, _| {
+            assert_eq!(args, &["-version".to_owned()]);
+            ok("")
+        });
+
+        let status = check_backend();
+        let runs = host.process_runs();
+        let probes = runs
+            .iter()
+            .filter(|r| r.program == KCAT)
+            .collect::<Vec<_>>();
+        assert_eq!(probes.len(), 1, "{runs:?}");
+        assert_eq!(probes[0].args, ["-V"]);
+        assert!(
+            status
+                .programs
+                .iter()
+                .any(|(p, state)| p == KCAT && state.contains("1.7.0")),
+            "{:?}",
+            status.programs
+        );
+        assert!(
+            runs.iter()
+                .filter(|r| r.program == JAVA)
+                .all(|r| r.args == ["-version"]),
+            "{runs:?}"
+        );
     }
 
     #[test]
