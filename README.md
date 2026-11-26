@@ -5,7 +5,7 @@ profiles, topics, partitions, brokers, consumer groups, message consumption
 (bounded, filtered and live) and publishing.
 
 ```sh
-cargo test                       # logic, against the SDK's MockHost (39 tests)
+cargo test                       # logic, against the SDK's MockHost (75 tests)
 openidea-plugin build            # → dist/plugin.wasm, validated like an install
 openidea-plugin check            # validates plugin.toml, locales and the component
 openidea-plugin link             # loads this folder in the IDE (Settings › Plugins)
@@ -70,9 +70,13 @@ OpenIDEA (WASM) --host::run_process--> kafka-topics.sh / console-consumer.sh / �
     `PATH`.
  4. The **Kafka CLI** view shows the installed version, the catalog and the
     state of each program; **Kafka: Verify CLI Installation** probes the
-    grants. The `process:kafka-*.sh` capabilities remain as an optional
-    fallback for a Kafka installed outside the plugin; **Kafka: Copy Script
-    Paths** copies those paths.
+    grants. Each tool is asked for its version with the flag it accepts:
+    `kcat -V` (`--version` is an unknown argument for kcat), `java -version`
+    (also works on Java 8) and `--version` for curl, tar and the Kafka
+    scripts. The detected versions appear next to each program, and Java's
+    own version is shown separately. The `process:kafka-*.sh` capabilities
+    remain as an optional fallback for a Kafka installed outside the plugin;
+    **Kafka: Copy Script Paths** copies those paths.
  5. **Prerequisite:** Java 17+ on the `PATH` for Kafka 4.x (11+ for 3.x).
     `kcat` is optional and only needed to publish to a specific partition
     (install it with your OS package manager).
@@ -240,7 +244,7 @@ Messages is `trash`.
 | Type | Capabilities |
 | --- | --- |
 | Required | `project.read`, `storage`, `events`, `process:curl`, `process:tar`, `process:java` |
-| Optional | `process:kafka-topics.sh`, `process:kafka-console-consumer.sh`, `process:kafka-console-producer.sh`, `process:kafka-consumer-groups.sh`, `process:kafka-get-offsets.sh`, `process:kafka-broker-api-versions.sh`, `process:kafka-metadata-quorum.sh`, `process:kafka-run-class.sh`, `process:kcat`, `net:downloads.apache.org`, `net:archive.apache.org`, `clipboard` |
+| Optional | `process:kafka-topics.sh`, `process:kafka-console-consumer.sh`, `process:kafka-console-producer.sh`, `process:kafka-consumer-groups.sh`, `process:kafka-get-offsets.sh`, `process:kafka-broker-api-versions.sh`, `process:kafka-metadata-quorum.sh`, `process:kafka-run-class.sh`, `process:kcat`, `net:dlcdn.apache.org`, `net:downloads.apache.org`, `net:archive.apache.org`, `clipboard`, `fs.read:~` |
 
 Missing optional capabilities degrade gracefully: the view shows a note and
 the rest keeps working.
@@ -312,13 +316,16 @@ or use a schema-aware client outside the plugin.
 
 The console tools are text-oriented. UTF-8 text works with any byte-based
 topic: Kafka does not attach a schema to the topic, so `StringSerializer` on
-publish and `ByteArrayDeserializer` on consume are compatible. Kafka 4.x's
-console producer hardcodes `ByteArraySerializer`, so choosing
-`ByteArraySerializer` in the form still writes the UTF-8 text; on Kafka 3.x
-the selected serializer class is honored. `ByteArrayDeserializer` in
-`DefaultMessageFormatter` prints the Java `toString()` of `byte[]` (for
-example `[B@…`), not the original text — use `StringSerializer` as the consume
-format when reading text published by this plugin.
+publish and `ByteArrayDeserializer` on consume are compatible. Both Kafka 4.x
+and 3.x force `ByteArraySerializer` inside `ConsoleProducer`, so choosing
+`ByteArraySerializer` in the form still writes the UTF-8 text typed in the
+Messages view. `DefaultMessageFormatter` calls `toString()` on the
+deserialized value, and `ByteArrayDeserializer` would print the Java identity
+(for example `[B@1a2b…`) instead of the original text. For that reason the
+binary formats (`ByteArray`, `Bytes`, `ByteBuffer`, `Void`) omit the formatter
+deserializer: the raw bytes are written to stdout and the published UTF-8 text
+is displayed. `StringSerializer` (mapped to `StringDeserializer` on consume)
+makes the formatter decode the bytes explicitly.
 
 ## Known limitations
 
@@ -341,6 +348,28 @@ format when reading text published by this plugin.
   falling back to `https://downloads.apache.org/` and
   `https://archive.apache.org/dist/kafka/` for older releases. `downloadUrl`
   is configurable for private mirrors.
+
+## Recent changes
+
+- **Command log** is a left-aligned `Command` / `Status` / `Response` table.
+  Actions started in the Messages page now log readable entries such as
+  `consume pedidos` and `publish pedidos`, alongside the underlying Java
+  process, with redacted output.
+- **Binary payloads** from ByteArray/Bytes/ByteBuffer/Void formats display the
+  published UTF-8 text instead of the formatter's Java `[B@…` identity string.
+- **Beginning** is the default consume mode, so existing messages show up; a
+  previously saved `end` is migrated once, then explicit choices are kept.
+- Messages have a local **ack** button (`✓`/`○`) with a **Hide acked** filter.
+  Acks are persisted locally and never commit an offset to the broker.
+- Downloads prefer the fast **dlcdn.apache.org** CDN, fall back to
+  `downloads.apache.org` / `archive.apache.org`, persist progress and resume
+  interrupted transfers automatically. An existing tarball can be selected
+  with the local file picker.
+- The Messages format combobox shows `…Deserializer` labels while settings
+  keep the canonical `…Serializer` token.
+- CLI verification probes **kcat with `-V`** (not `--version`, which kcat
+  rejects as an unknown argument) and **Java with `-version`**; the detected
+  versions are shown in the Kafka CLI view.
 
 ## Build and install
 
