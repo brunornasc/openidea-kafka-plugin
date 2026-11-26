@@ -3,9 +3,10 @@
 //! The names mirror the Kafka serializer classes. A topic stores bytes; the
 //! (de)serializer is a client-side choice, so the selected format is applied
 //! to `ConsoleConsumer` via `--formatter-property` and to `ConsoleProducer`
-//! via `--command-property`. Kafka 4.x's console producer forces
-//! `ByteArraySerializer` internally, so the text written to stdin is what
-//! reaches the topic for every format.
+//! via `--command-property`. Both Kafka 3.x and 4.x force
+//! `ByteArraySerializer` internally in `ConsoleProducer`, so only formats
+//! whose wire bytes are the UTF-8 text itself can be published; the others
+//! are rejected before writing.
 
 use openidea_plugin::Error;
 
@@ -134,9 +135,20 @@ pub fn requires_schema_registry(format: &str) -> bool {
     format == "KafkaAvroSerializer" || format == "KafkaProtobufSerializer"
 }
 
-/// The publish form sends text. Numeric/String/Json formats are already the
-/// wire representation; binary and registry-backed formats cannot be produced
-/// from a text field without a custom serializer.
+/// Formatos que o console producer consegue publicar a partir do campo de
+/// texto: as bytes UTF-8 digitadas são exatamente a representação na wire.
+pub const PUBLISHABLE: [&str; 3] = [STRING, "ByteArraySerializer", "JsonSerializer"];
+
+pub fn publishable(format: &str) -> bool {
+    let format = normalize(format);
+    PUBLISHABLE.contains(&format.as_str())
+}
+
+/// The publish form sends UTF-8 text to `ConsoleProducer`, which always uses
+/// `ByteArraySerializer` internally. Formats with a binary wire encoding
+/// (numeric, Bytes/ByteBuffer and the registry-backed ones) cannot be produced
+/// that way: passing a serializer class name does not change the reader. Fail
+/// before writing instead of reporting a successful but unreadable record.
 pub fn serialize_text(format: &str, text: &str) -> Result<String, Error> {
     let format = normalize(format);
     if requires_schema_registry(&format) {
@@ -149,6 +161,13 @@ pub fn serialize_text(format: &str, text: &str) -> Result<String, Error> {
     if format == "VoidSerializer" {
         return Err(crate::i18n::t(
             "VoidSerializer produces a null value; choose StringSerializer and leave the message value empty instead.",
+        )
+        .into());
+    }
+    if !publishable(&format) {
+        return Err(crate::i18n::tf(
+            "{format} cannot be published from a text field: ConsoleProducer writes the UTF-8 bytes you type, so a consumer using {format} would reject the record. Choose StringSerializer, ByteArraySerializer or JsonSerializer.",
+            &[("format", &format)],
         )
         .into());
     }
@@ -217,7 +236,27 @@ mod tests {
         let _host = crate::mock_host();
         assert!(serialize_text("KafkaAvroSerializer", "{}").is_err());
         assert!(serialize_text("VoidSerializer", "x").is_err());
-        assert_eq!(serialize_text("IntegerSerializer", "42").unwrap(), "42");
-        assert_eq!(serialize_text("ByteArraySerializer", "hi").unwrap(), "hi");
+    }
+
+    #[test]
+    fn only_text_wire_formats_can_be_published_from_the_form() {
+        let _host = crate::mock_host();
+        for format in PUBLISHABLE {
+            assert_eq!(serialize_text(format, "42").unwrap(), "42");
+        }
+        // Numeric and Bytes serializers have a binary wire encoding that the
+        // console producer cannot emit from a text line.
+        for format in [
+            "IntegerSerializer",
+            "LongSerializer",
+            "DoubleSerializer",
+            "FloatSerializer",
+            "BytesSerializer",
+            "ByteBufferSerializer",
+        ] {
+            let error = serialize_text(format, "42").unwrap_err().to_string();
+            assert!(error.contains(format), "{error}");
+            assert!(!publishable(format));
+        }
     }
 }

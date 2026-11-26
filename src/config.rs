@@ -177,8 +177,10 @@ impl Connection {
         if !self.tls_keystore.is_empty() {
             out.push(("ssl.keystore.location".into(), self.tls_keystore.clone()));
         }
-        if self.uses_sasl() {
+        if self.security_protocol != "PLAINTEXT" {
             out.push(("security.protocol".into(), self.security_protocol.clone()));
+        }
+        if self.uses_sasl() {
             out.push(("sasl.mechanism".into(), self.sasl_mechanism.clone()));
         }
         // Falha rápido quando o broker não responde, em vez de deixar a JVM
@@ -1035,6 +1037,24 @@ mod tests {
         assert!(kcat.contains(&("sasl.username".into(), "dev".into())));
         assert!(kcat.contains(&("ssl.ca.location".into(), "/etc/kafka/ca.pem".into())));
         assert!(kcat.iter().all(|(k, _)| !is_secret_key(k)));
+    }
+
+    #[test]
+    fn ssl_without_sasl_still_configures_the_protocol_and_truststore() {
+        let _host = crate::mock_host();
+        let mut c = Connection::new("ssl", "SSL broker");
+        c.bootstrap_servers = "broker.invalid:9093".into();
+        c.security_protocol = "SSL".into();
+        c.tls_truststore = "/etc/kafka/truststore.jks".into();
+        c.validate().unwrap();
+
+        let java = c.java_properties();
+        assert!(java.contains(&("security.protocol".into(), "SSL".into())));
+        assert!(java.contains(&(
+            "ssl.truststore.location".into(),
+            "/etc/kafka/truststore.jks".into()
+        )));
+        assert!(!java.iter().any(|(k, _)| k == "sasl.mechanism"));
     }
 
     #[test]

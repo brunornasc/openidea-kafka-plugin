@@ -472,31 +472,37 @@ fn one_line_jaas(text: &str) -> String {
 }
 
 /// Caminho do `--command-config`: o arquivo do usuário, ou um arquivo no
-/// diretório privado do plugin escrito a partir do JAAS inline. Nenhum segredo
-/// aparece em `argv` — apenas o caminho.
+/// diretório privado do plugin com todas as propriedades não sensíveis do
+/// formulário (protocolo SSL/SASL, truststore, timeouts, extras) e, quando
+/// usado, o JAAS inline. Nenhum segredo aparece em `argv` — apenas o caminho.
+/// O arquivo é necessário porque comandos de administração não aceitam
+/// `--command-property`: sem ele um perfil SSL form-only é executado como
+/// PLAINTEXT.
 fn properties_path(c: &Connection) -> Result<Option<String>, Error> {
     if !c.client_properties.trim().is_empty() {
         return Ok(Some(c.client_properties.clone()));
     }
-    if c.sasl_jaas_config.trim().is_empty() {
-        return Ok(None);
-    }
-    let dir = host::fs::plugin_dir()?;
     let mut lines: Vec<String> = c
         .java_properties()
         .into_iter()
         .map(|(key, value)| format!("{key}={value}"))
         .collect();
-    lines.push(format!(
-        "sasl.jaas.config={}",
-        one_line_jaas(&c.sasl_jaas_config)
-    ));
+    if !c.sasl_jaas_config.trim().is_empty() {
+        lines.push(format!(
+            "sasl.jaas.config={}",
+            one_line_jaas(&c.sasl_jaas_config)
+        ));
+    }
+    if lines.is_empty() {
+        return Ok(None);
+    }
+    let dir = host::fs::plugin_dir()?;
     let body = format!("{}\n", lines.join("\n"));
     let hash = stable_hash(&format!("{}|{}", c.id, body));
     let path = format!("{dir}/kafka-client-{hash:016x}.properties");
     host::fs::write_file(&path, &body).map_err(|e| {
         Error::Failed(i18n::tf(
-            "Could not write the inline JAAS properties file: {error}",
+            "Could not write the client properties file: {error}",
             &[("error", &e.to_string())],
         ))
     })?;
@@ -984,9 +990,22 @@ pub struct PublishMessage {
     pub partition: Option<i32>,
 }
 
-/// Linha de stdin do console producer: `headers<US>chave<US>valor`.
-/// Com `--property parse.headers/parse.key` e separadores de controle.
+/// Linha de stdin do console producer, no formato esperado pelo
+/// `LineMessageReader` real:
+///
+/// - sem chave e sem headers: apenas o valor;
+/// - com chave e sem headers: `chave<US>valor` (um único separador!);
+/// - com headers: `headers<US>chave<US>valor`, com `parse.headers=true`.
+///
+/// Incluir o campo de headers vazio quando `parse.headers` está desligado
+/// faz o leitor tratar a chave como valor e publicar com chave vazia.
 pub fn publish_input(msg: &PublishMessage) -> String {
+    if msg.headers.is_empty() {
+        return match &msg.key {
+            Some(key) => format!("{key}{FIELD_SEP}{}\n", msg.value),
+            None => format!("{}\n", msg.value),
+        };
+    }
     let headers = msg
         .headers
         .iter()
@@ -994,26 +1013,25 @@ pub fn publish_input(msg: &PublishMessage) -> String {
         .collect::<Vec<_>>()
         .join(&HEADER_SEP.to_string());
     let key = msg.key.clone().unwrap_or_else(|| NULL_MARKER.into());
-    if msg.headers.is_empty() && msg.key.is_none() {
-        return format!("{}\n", msg.value);
-    }
     format!("{headers}{FIELD_SEP}{key}{FIELD_SEP}{}\n", msg.value)
 }
 
-/// Sinalizadores do leitor de linhas do console producer.
+/// Sinalizadores do leitor de linhas do console producer. As propriedades de
+/// headers só são enviadas quando o campo é usado, para o leitor nunca iniciar
+/// um parsing que a linha não contém.
 pub fn producer_reader_props(msg: &PublishMessage) -> Vec<String> {
-    let mut props = vec![
-        format!("key.separator={FIELD_SEP}"),
-        format!("headers.delimiter={FIELD_SEP}"),
-        format!("headers.separator={HEADER_SEP}"),
-        format!("headers.key.separator={HEADER_KV}"),
-        format!("null.marker={NULL_MARKER}"),
-    ];
+    let mut props = vec![format!("key.separator={FIELD_SEP}")];
     if !msg.headers.is_empty() {
-        props.push("parse.headers=true".into());
+        props.extend(strings(&[
+            "parse.headers=true",
+            &format!("headers.delimiter={FIELD_SEP}"),
+            &format!("headers.separator={HEADER_SEP}"),
+            &format!("headers.key.separator={HEADER_KV}"),
+        ]));
     }
     if !msg.headers.is_empty() || msg.key.is_some() {
         props.push("parse.key=true".into());
+        props.push(format!("null.marker={NULL_MARKER}"));
     }
     props
 }
@@ -1593,6 +1611,31 @@ mod tests {
     }
 
     #[test]
+    fn ssl_form_profile_reaches_admin_commands_via_a_generated_config() {
+        let host = crate::mock_host();
+        let mut c = connection();
+        c.security_protocol = "SSL".into();
+        c.tls_truststore = "/etc/kafka/truststore.jks".into();
+        let seen = std::rc::Rc::new(std::cell::RefCell::new(String::new()));
+        let capture = seen.clone();
+        host.on_process(TOPICS, move |args, _| {
+            let i = args
+                .iter()
+                .position(|a| a == "--command-config")
+                .expect("admin tools need the generated config file");
+            *capture.borrow_mut() = args[i + 1].clone();
+            ok("t\n")
+        });
+        test_connection(&c).unwrap();
+        let body = host::fs::read_file(&seen.borrow()).unwrap();
+        assert!(body.contains("security.protocol=SSL"), "{body}");
+        assert!(
+            body.contains("ssl.truststore.location=/etc/kafka/truststore.jks"),
+            "{body}"
+        );
+    }
+
+    #[test]
     fn inline_jaas_goes_to_a_private_file_not_to_argv() {
         let host = crate::mock_host();
         let mut c = connection();
@@ -1802,7 +1845,7 @@ mod tests {
     fn chosen_format_wins_over_global_serializer_and_uses_legacy_flag() {
         let host = crate::mock_host();
         host.set_setting("valueSerializer", r#""org.example.GlobalSerializer""#);
-        config::set_format("t", "serializer", "LongSerializer").unwrap();
+        config::set_format("t", "serializer", "ByteArraySerializer").unwrap();
         host.on_process(PRODUCER, |args, _| {
             if args.iter().any(|a| a == "--command-property") {
                 return Ok(ProcessOutput {
@@ -1818,7 +1861,7 @@ mod tests {
                 .collect();
             assert_eq!(
                 serializers.last().unwrap().as_str(),
-                "value.serializer=org.apache.kafka.common.serialization.LongSerializer"
+                "value.serializer=org.apache.kafka.common.serialization.ByteArraySerializer"
             );
             ok("")
         });
@@ -1976,6 +2019,104 @@ mod tests {
             partition: None,
         };
         publish(&connection(), &msg).unwrap();
+    }
+
+    /// Réplica mínima do `LineMessageReader` do Kafka 4.x para as opções que
+    /// o plugin envia. Serve de round-trip semiótico: se o campo de headers
+    /// aparecer sem `parse.headers`, a chave vem vazia — exatamente o bug
+    /// reproduzido na revisão do pacote.
+    fn read_console_line(line: &str, props: &[String]) -> (Option<String>, String) {
+        let parse_headers = props.iter().any(|p| p == "parse.headers=true");
+        let parse_key = props.iter().any(|p| p == "parse.key=true");
+        let null = props.iter().find_map(|p| p.strip_prefix("null.marker="));
+        let mut rest = line.trim_end_matches('\n');
+        if parse_headers {
+            rest = rest.split_once(FIELD_SEP).unwrap().1;
+        }
+        if parse_key {
+            let (key, value) = rest.split_once(FIELD_SEP).unwrap();
+            return (
+                if Some(key) == null {
+                    None
+                } else {
+                    Some(key.into())
+                },
+                value.into(),
+            );
+        }
+        (None, rest.into())
+    }
+
+    #[test]
+    fn a_key_without_headers_is_not_shifted_into_the_value() {
+        let msg = PublishMessage {
+            topic: "orders".into(),
+            key: Some("customer-7".into()),
+            value: "payload".into(),
+            ..PublishMessage::default()
+        };
+        let line = publish_input(&msg);
+        let props = producer_reader_props(&msg);
+        assert_eq!(line, format!("customer-7{FIELD_SEP}payload\n"));
+        assert!(
+            !props.iter().any(|p| p == "parse.headers=true"),
+            "{props:?}"
+        );
+        assert_eq!(
+            read_console_line(&line, &props),
+            (Some("customer-7".into()), "payload".into())
+        );
+
+        let host = crate::mock_host();
+        let expected = line.clone();
+        host.on_process(PRODUCER, move |args, stdin| {
+            assert!(!args.iter().any(|a| a == "parse.headers=true"));
+            assert_eq!(stdin, Some(expected.as_str()));
+            ok("")
+        });
+        publish(&connection(), &msg).unwrap();
+    }
+
+    #[test]
+    fn value_only_and_keyed_with_headers_survive_the_console_reader() {
+        for msg in [
+            PublishMessage {
+                topic: "t".into(),
+                value: "plain text".into(),
+                ..PublishMessage::default()
+            },
+            PublishMessage {
+                topic: "t".into(),
+                key: Some("k".into()),
+                value: "v".into(),
+                headers: vec![("trace".into(), "abc".into())],
+                ..PublishMessage::default()
+            },
+        ] {
+            let line = publish_input(&msg);
+            let props = producer_reader_props(&msg);
+            assert_eq!(
+                read_console_line(&line, &props),
+                (msg.key.clone(), msg.value)
+            );
+        }
+    }
+
+    #[test]
+    fn numeric_serializer_is_rejected_before_writing_incompatible_bytes() {
+        let host = crate::mock_host();
+        config::set_format("orders", "serializer", "IntegerSerializer").unwrap();
+        let msg = PublishMessage {
+            topic: "orders".into(),
+            value: "42".into(),
+            ..PublishMessage::default()
+        };
+        let error = publish(&connection(), &msg).unwrap_err().to_string();
+        assert!(error.contains("IntegerSerializer"), "{error}");
+        assert!(
+            host.process_runs().is_empty(),
+            "no incompatible record may be published"
+        );
     }
 
     #[test]

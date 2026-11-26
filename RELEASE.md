@@ -2,12 +2,13 @@
 
 Artifact ready to publish: `dist/brunornasc.kafka-0.1.0.oiplugin`
 
-- Built from `d03581c` (`plugin.toml` version stays `0.1.0`).
-- SHA-256: `f791dae9271f08867e7be10d3cdc90380b2f73cf70774a57fa71a226af3d5508`
-- Size: 259.9 KiB. **Signed by `brunornasc`** with the publisher key
-  (`brunornasc.key`, kept outside version control via `.gitignore`). To rebuild
-  it: `openidea-plugin pack . --key brunornasc.key --publisher brunornasc --out dist/brunornasc.kafka-0.1.0.oiplugin`.
-- Validated with `cargo test` (75 tests), `openidea-plugin build`,
+- Version stays `0.1.0`. SHA-256:
+  `e589becf18fb30aca837f2f9bbd54fffa3c366a08df593eeda4c43993010bb0e`
+  (261.3 KiB). Use this same value in the registry entry.
+- **Signed by `brunornasc`** with the publisher key (`brunornasc.key`, kept
+  outside version control via `.gitignore`). To rebuild it:
+  `openidea-plugin pack . --key brunornasc.key --publisher brunornasc --out dist/brunornasc.kafka-0.1.0.oiplugin`.
+- Validated with `cargo test` (81 tests), `openidea-plugin build`,
   `openidea-plugin check` and `openidea-plugin check` on the package.
 
 ## Highlights
@@ -38,6 +39,11 @@ Artifact ready to publish: `dist/brunornasc.kafka-0.1.0.oiplugin`
   versions in the Kafka CLI view.
 - **Language**: English by default, Brazilian Portuguese catalog shipped, and
   plugin-built text follows the IDE locale.
+- **Publish round-trip fixes**: a key without headers is sent as
+  `key<separator>value` (the empty headers field used to shift the key into the
+  value); numeric/Bytes serializers are rejected before writing incompatible
+  UTF-8 bytes; and SSL-only profiles get a generated client properties file
+  with protocol and truststore, also for admin commands.
 
 ## Requirements
 

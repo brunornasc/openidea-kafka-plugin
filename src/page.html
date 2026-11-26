@@ -218,7 +218,10 @@
 
   function fillFormats(select, selected, deserializer) {
     select.innerHTML = '';
-    const formats = state.formats && state.formats.length ? state.formats : ['StringSerializer'];
+    // The publish field only offers formats that ConsoleProducer can actually
+    // emit from UTF-8 text; numeric/Bytes formats have a binary wire encoding.
+    const offered = deserializer ? state.formats : state.publishFormats;
+    const formats = offered && offered.length ? offered : ['StringSerializer'];
     const labels = deserializer
       ? (state.deserializerFormats || formats)
       : formats;

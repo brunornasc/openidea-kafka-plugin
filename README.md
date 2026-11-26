@@ -116,6 +116,12 @@ and point the optional script capabilities at its `bin/` scripts.
   backslashes are escaped. If both are filled, the explicit file takes
   precedence. The inline value is stored in plain text with the profile:
   development only.
+- When no explicit properties file is given, the plugin generates one with the
+  non-secret form settings (`security.protocol`, including **SSL without SASL**,
+  truststore/keystore paths, timeouts, extra properties and inline JAAS when
+  present) and passes its path with `--command-config` / `*.config` to **every**
+  tool. Admin commands do not accept `--command-property`, so without this file
+  an SSL-only profile would silently run as PLAINTEXT.
 - **"Test and Save" runs `kafka-topics.sh --list` before persisting** — if the
   cluster does not answer, nothing is stored. There is also a standalone
   **Kafka: Test Connection** command. CLI calls open a cancellable task that
@@ -296,11 +302,17 @@ switching topics restores what was used for each one.
   `[B@1a2b…`, while raw bytes display the UTF-8 text that was published.
   Short aliases and fully qualified class names are accepted and normalized to
   one of the names above.
-- On publish, the same serializer class is passed via `--command-property`
-  (Kafka 4.x) or `--producer-property` (Kafka 3.x), after the global settings
-  so the per-topic choice wins. Both Kafka generations then force
-  `ByteArraySerializer` inside `ConsoleProducer`, so the UTF-8 text typed in the
-  form is the wire representation for every text-based format, unchanged.
+- On publish, only `StringSerializer`, `ByteArraySerializer` and
+  `JsonSerializer` are offered: the UTF-8 text typed in the form is exactly the
+  byte representation those formats expect. Both Kafka generations force
+  `ByteArraySerializer` inside `ConsoleProducer`, so passing an
+  `IntegerSerializer`/`Long`/`Double`/`Float`/`Bytes`/`ByteBuffer` class would
+  not change the emitted bytes — `IntegerSerializer(42)` is `00 00 00 2a`, but
+  the console line sends the two ASCII bytes `42`. Those formats (and Void,
+  Avro and Protobuf) are rejected with a clear message before anything is
+  written, instead of reporting a success that no matching consumer can read.
+  The chosen serializer is still sent after the global settings so the per-topic
+  choice wins where it can be honored.
 - A topic only stores bytes. These formats are a client convention: a consumer
   outside the plugin must use the matching deserializer to read the same
   payload.
@@ -370,6 +382,14 @@ makes the formatter decode the bytes explicitly.
 - CLI verification probes **kcat with `-V`** (not `--version`, which kcat
   rejects as an unknown argument) and **Java with `-version`**; the detected
   versions are shown in the Kafka CLI view.
+- Publishing with a key but no headers now sends `key<separator>value` and lets
+  `LineMessageReader` parse the key; the old empty headers field shifted the
+  key into the value.
+- SSL-only profiles (no SASL and no explicit properties file) now generate a
+  client properties file with `security.protocol=SSL` and the truststore, also
+  for admin commands.
+- Numeric/Bytes serializer choices are rejected before publishing instead of
+  writing incompatible UTF-8 bytes while reporting success.
 
 ## Build and install
 

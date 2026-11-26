@@ -310,6 +310,7 @@ impl Kafka {
         value["active"] = json!(config::active_id());
         value["topics"] = json!(self.topic_names);
         value["formats"] = json!(formats::NAMES);
+        value["publishFormats"] = json!(formats::PUBLISHABLE);
         value["deserializerFormats"] = json!(
             formats::NAMES
                 .iter()
@@ -2515,6 +2516,10 @@ mod tests {
                 .as_array()
                 .unwrap()
                 .contains(&json!("KafkaProtobufSerializer"))
+        );
+        assert_eq!(
+            state["publishFormats"],
+            json!(["StringSerializer", "ByteArraySerializer", "JsonSerializer"])
         );
         assert_eq!(state["topicFormats"].as_object().unwrap().len(), 0);
 

@@ -360,5 +360,7 @@
   "Live log opened.": "Log ao vivo aberto.",
   "Message #{offset} {verb}": "Mensagem #{offset} {verb}",
   "acked": "marcada como lida",
-  "unacked": "desmarcada"
+  "unacked": "desmarcada",
+  "Could not write the client properties file: {error}": "Não foi possível escrever o arquivo de propriedades do cliente: {error}",
+  "{format} cannot be published from a text field: ConsoleProducer writes the UTF-8 bytes you type, so a consumer using {format} would reject the record. Choose StringSerializer, ByteArraySerializer or JsonSerializer.": "{format} não pode ser publicado a partir de um campo de texto: o ConsoleProducer escreve os bytes UTF-8 digitados, então um consumidor usando {format} rejeitaria o registro. Escolha StringSerializer, ByteArraySerializer ou JsonSerializer."
 }
