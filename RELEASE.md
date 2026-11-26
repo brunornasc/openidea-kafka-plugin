@@ -3,11 +3,10 @@
 Artifact ready to publish: `dist/brunornasc.kafka-0.1.0.oiplugin`
 
 - Built from `d03581c` (`plugin.toml` version stays `0.1.0`).
-- SHA-256: `6596821b704baf4da6c2ad4e12b152df1e251dff00e963c69fa46443e04ba527`
-- Size: 259.7 KiB. **Unsigned** package (no publisher key is present in this
-  repository). For a signed marketplace package, generate/keep a key outside
-  the repo and repack with
-  `openidea-plugin pack . --key <key-file> --publisher brunornasc --out dist/brunornasc.kafka-0.1.0.oiplugin`.
+- SHA-256: `f791dae9271f08867e7be10d3cdc90380b2f73cf70774a57fa71a226af3d5508`
+- Size: 259.9 KiB. **Signed by `brunornasc`** with the publisher key
+  (`brunornasc.key`, kept outside version control via `.gitignore`). To rebuild
+  it: `openidea-plugin pack . --key brunornasc.key --publisher brunornasc --out dist/brunornasc.kafka-0.1.0.oiplugin`.
 - Validated with `cargo test` (75 tests), `openidea-plugin build`,
   `openidea-plugin check` and `openidea-plugin check` on the package.
 
